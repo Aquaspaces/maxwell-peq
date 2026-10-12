@@ -1,7 +1,7 @@
-"""Windows Maxwell PS direct-cable transport. No hardware access at import.
+"""Windows Maxwell PS direct USB and dongle transport. No access at import.
 
 Only opening an instance enumerates HID devices. All writes use the exact
-read/live-only command allowlist. HID native calls are synchronous: transaction
+read/live/save command allowlist with explicit write capabilities. HID native calls are synchronous: transaction
 timeouts bound polling but cannot interrupt a stalled HidD_GetInputReport call.
 Call from a dedicated worker process if the UI needs a hard wall-clock deadline.
 """
@@ -13,7 +13,8 @@ import time
 from peq_protocol import (InputStream, ProtocolError, check_packet, output_reports,
                           validate_request, parse_index, parse_ui, parse_live_ack,
                           read_index_command, read_ui_command, live_command, parse_coefficients,
-                          read_coefficients_command)
+                          read_coefficients_command, storage_space_command, parse_storage_space,
+                          save_coefficients_command, parse_save_ack)
 
 
 class GUID(C.Structure):
@@ -42,10 +43,15 @@ def _bind(dll, name, result, *args):
 
 class MaxwellPsHid:
     """Use as a context manager. Session defaults to reads until allow_live=True."""
-    def __init__(self, *, allow_live=False):
+    def __init__(self, *, allow_live=False, transport='usb', allow_persistent=False):
         if os.name != "nt":
             raise OSError("This transport requires Windows")
+        if transport not in ('usb', 'dongle'):
+            raise ValueError('Choose usb or dongle transport.')
+        self.transport = transport
+        self.pid = 0x4B19 if transport == 'dongle' else 0x4B1A
         self.allow_live = allow_live
+        self.allow_persistent = allow_persistent
         self._lock = threading.Lock()
         self.handle = None
         k = C.WinDLL("kernel32", use_last_error=True)
@@ -99,7 +105,7 @@ class MaxwellPsHid:
                 try:
                     attr = Attributes()
                     attr.size = C.sizeof(attr)
-                    if not self.attributes(probe, C.byref(attr)) or (attr.vid, attr.pid) != (0x3329, 0x4B1A):
+                    if not self.attributes(probe, C.byref(attr)) or (attr.vid, attr.pid) != (0x3329, self.pid):
                         continue
                     prep = ptr()
                     if not self.preparsed(probe, C.byref(prep)):
@@ -116,7 +122,7 @@ class MaxwellPsHid:
         finally:
             destroy(devices)
         if len(candidates) != 1:
-            raise OSError(f"Expected one original Maxwell PlayStation USB-C interface, found {len(candidates)}")
+            raise OSError(f"Expected one original Maxwell PlayStation {transport} interface, found {len(candidates)}")
         self.path, self.input_size, self.output_size, self.device_version = candidates[0]
         self._open_control()
 
@@ -149,7 +155,8 @@ class MaxwellPsHid:
         """Read-only snapshot. UI data is available only for current custom slots."""
         raw_index = self.transact(read_index_command())
         index = parse_index(raw_index)
-        state = {"device": {"vid": 0x3329, "pid": 0x4B1A, "usage_page": 0xFF13,
+        state = {"device": {"vid": 0x3329, "pid": self.pid, "usage_page": 0xFF13,
+                            "transport": self.transport,
                             "path": self.path, "bcd_device": self.device_version,
                             "input_report_bytes": self.input_size, "output_report_bytes": self.output_size},
                  "firmware": None, "firmware_note": "Firmware command is outside this minimal allowlist",
@@ -175,6 +182,16 @@ class MaxwellPsHid:
         ack = self.transact(live_command(coefficients))
         return {"accepted": True, "ack_hex": ack.hex(), "persistence_write_sent": False}
 
+    def has_storage_space(self):
+        return parse_storage_space(self.transact(storage_space_command()))
+
+    def save_coefficients(self, slot, coefficients):
+        ack = self.transact(save_coefficients_command(slot, coefficients), timeout=8.)
+        actual = parse_coefficients(self.transact(read_coefficients_command(slot)), slot)
+        if actual != coefficients:
+            raise ProtocolError('Saved coefficient read-back differs from the requested profile. Restore the saved backup.')
+        return {'save_ack_hex': ack.hex(), 'saved_verified': True, 'persistence_write_sent': True}
+
     def _input(self):
         report = (C.c_ubyte * self.input_size)()
         report[0] = 7
@@ -182,10 +199,11 @@ class MaxwellPsHid:
             raise C.WinError(C.get_last_error())
         return bytes(report)
 
-    def transact(self, packet: bytes, *, timeout=3.0) -> bytes:
-        validate_request(packet, allow_live=self.allow_live)
+    def transact(self, packet: bytes, *, timeout=None) -> bytes:
+        validate_request(packet, allow_live=self.allow_live, allow_persistent=self.allow_persistent)
         if not self.handle:
             raise OSError("HID session is closed")
+        timeout = (6.0 if self.transport == 'dongle' else 3.0) if timeout is None else timeout
         if not 0.1 <= timeout <= 30:
             raise ValueError("Timeout must be 0.1..30 seconds")
         command, _ = check_packet(packet, 0x5A)
@@ -200,7 +218,8 @@ class MaxwellPsHid:
                 time.sleep(0.01)
             else:
                 raise ProtocolError("Input queue did not drain; no command sent")
-            for report in output_reports(packet, report_size=self.output_size, allow_live=self.allow_live):
+            for report in output_reports(packet, dongle=self.transport == 'dongle', report_size=self.output_size,
+                                         allow_live=self.allow_live, allow_persistent=self.allow_persistent):
                 raw = (C.c_ubyte * len(report)).from_buffer_copy(report)
                 count = W.DWORD()
                 if not self.write(self.handle, raw, len(raw), C.byref(count), None) or count.value != len(raw):
@@ -213,6 +232,10 @@ class MaxwellPsHid:
                     if message[:2] == b"\x05\x5b" and check_packet(message, 0x5B)[0] == command:
                         if command == 0x0E03:
                             parse_live_ack(message)
+                        elif command == 0x0A03:
+                            parse_storage_space(message)
+                        elif command == 0x0A0D:
+                            parse_save_ack(message, int.from_bytes(packet[6:8], 'little') - 0xE42C)
                         elif command == 0x0901:
                             parse_index(message)
                         elif packet[7] == 0xEF:

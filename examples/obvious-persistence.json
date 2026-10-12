@@ -1,0 +1,7 @@
+{
+  "filters": [
+    {"type": "peak", "frequency": 1370, "gain": -12, "q": 0.35},
+    {"type": "peak", "frequency": 6200, "gain": -12, "q": 0.7}
+  ],
+  "preamp": "auto"
+}

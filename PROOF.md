@@ -1,6 +1,6 @@
 # Evidence record — 2026-10-12
 
-Target: original Audeze Maxwell PlayStation, direct USB interface VID `3329`, PID `4B1A`, usage page `FF13`. A `4B19` dongle was also present and was not used. The active built-in preset returned raw index `4`. This work only sent reads to the actual headset; no live EQ, saved preset or firmware writes were sent.
+Initial investigation target: original Audeze Maxwell PlayStation, direct USB interface VID `3329`, PID `4B1A`, usage page `FF13`. A `4B19` dongle was also present and was not used. The active built-in preset returned raw index `4`. That initial investigation only sent reads. Later live and persistent tests are recorded below.
 
 ## Coefficient generator
 
@@ -29,13 +29,13 @@ RACE request: `05 5A`, little-endian length including the two-byte command, comm
 - Custom raw indices 7-10 map to storage slots 0-3.
 - Temporary live coefficients: command `0E03`, payload `00` followed by the 844-byte blob. Require exact success acknowledgement `05 5B 03 00 03 0E 00`.
 
-App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0` (command `0A0D`); this write is deliberately absent from the proof of concept. Protocol references are from local app disassembly and the supplied [balance/firmware tool source](https://github.com/kats1123/maxwell-balance-and-firmware-tool) at commit `16280b47fef610284beab5d40d46868d7b4c3253`.
+App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0` (command `0A0D`); implemented later with the restricted save/readback path described below. Protocol references are from local app disassembly and the supplied [balance/firmware tool source](https://github.com/kats1123/maxwell-balance-and-firmware-tool) at commit `16280b47fef610284beab5d40d46868d7b4c3253`.
 
 ## What remains unverified
 
 Validation completed: 23 unit/integration tests passed with the vendor DLL present; JavaScript syntax check passed. Browser checks at 1280 px and 390 px verified rendering without page overflow, four compiled curves, stale-preview invalidation after Q edits, and a successful read of active built-in preset 4 with Apply disabled. Recovery tests use mocked workers, including pre-send preset changes, timeouts, restoration without recompilation and offline-mode gating.
 
-Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below; Xbox, Maxwell 2, Bluetooth and dongle transport remain untested.
+Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below; Xbox, Maxwell 2 and Bluetooth remain untested. Dongle testing is recorded below.
 
 ## HID contention fix — 2026-10-12
 
@@ -62,3 +62,23 @@ Shelf-containing sets use `extended_filters.py`, with equations from the [W3C Au
 Pass-filter resonance is included in automatic headroom analytically: for Q > sqrt(0.5), peak magnitude is Q/sqrt(1-1/(4Q^2)). Comparisons include the corresponding digital resonance frequency, DC and Nyquist. Error comparisons for experimental sets floor both responses at -90 dB; this avoids meaningless relative-dB errors at deep stopband nulls while still rejecting leakage above that floor. The 0.15 dB threshold remains: for example a 30 Hz, -6 dB low shelf is rejected for approximately 0.237 dB error, whereas a 100 Hz, +6 dB shelf passes at approximately 0.0363 dB.
 
 Verification: 36 tests passed locally with the inspected DLL, including all new types, mixed cascades, shelf endpoint/midpoint properties, pass resonance, disabled filters, validation and a frozen SHA-256 check that the original peak preset remains byte-identical. Browser compilation returned four rate curves for all new filter types with appropriate gain/Q controls disabled. New filter types remain marked experimental; no new filter was sent to the headset during development.
+
+
+## Dongle and persistent coefficient storage ? 2026-10-12
+
+The original PS dongle uses VID `3329`, PID `4B19`, usage `FF13`, 62-byte HID reports and route byte `80`. An actual full snapshot through that interface returned current index 10 (Custom 4), its UI records and its 844-byte coefficient blob. The stored bytes matched the earlier USB backup exactly.
+
+Static evidence comes from `Audeze.exe` SHA-256 `88299c36990f44de4ce17a5b9c65b5521fd68ee649fdb83e80ccf530ad604ca5` and the inspected stock PS v74 firmware. Local report: `X:/audeze-re/analysis/persistence/report.md`. The connected headset's firmware version remains unidentified; the stock firmware trace establishes implementation evidence, not its runtime version.
+
+- App function `0x140024EF0` sends `0A0D`, a little-endian key `E42C + slot`, then the 844-byte coefficient blob. The RACE packet totals 852 bytes. Acknowledgement contains status and the same key.
+- `0A03` with payload `4C03` is a capacity query for 844 bytes, not garbage collection. Firmware handler `0x081768E0` calls `0x081514F8` to read locked capacity counters; reply 1 means enough space and 0 means insufficient. The implementation never sends a reclaim/erase operation.
+- Firmware `0A0D` handler `0x08176838` writes the key and compares readback. The editor independently reads the same key and requires every byte to match before reporting success or sending the live apply.
+- Static reload code follows E401 phase 0 to E402. Presets 7?10 map phase 0 to E42C?E42F. Functions `0x081A5982`, `0x081A59FC`, `0x081A5A1E`, `0x081A5A2A` and `0x081A5A9C` select and load these coefficients through `0x081A4C68`. This path does not regenerate coefficients from the EF00?EF03 slider records. It supports coefficient-only persistence; runtime reboot validation is a separate check.
+
+The API adds `/api/save` and `/api/restore_saved`. An immutable original backup is separate from the expected current stored state. Before each write, the server atomically journals the pending operation, original backup and desired bytes. Restart recovers that session. Save/Apply are disabled after uncertain writes; explicit saved restoration can repair mismatched stored coefficients while requiring the same interface, slot and UI records. Restore does not depend on the math DLL.
+
+Hardware save test: with the user's authorization, the editor saved two peaks (1,370 Hz, -12 dB, Q 0.35; 6,200 Hz, -12 dB, Q 0.7; automatic preamp 0 dB) through the dongle to Custom 4. Save ACK was `055b05000d0a002fe4`. All 844 saved bytes matched compiled SHA-256 `f53a4e499baec5c1c403e829137618b70eba3d76ca6225f486a5878947f17833`. The subsequent temporary-apply ACK was `055b0300030e00`. Original coefficients remain in the ignored backups directory, including the earlier USB backup and a fresh matching dongle backup. Raw results: `artifacts/dongle-first-read.json`, `artifacts/dongle-first-save.json`, `artifacts/obvious-persistence-compiled.json`.
+
+Before saving, the old USB session's restoration was stopped before a write: one attempt encountered a stream-boundary error, and a fresh snapshot then detected a changed USB interface path. A new dongle snapshot matched the original stored data before creating the new backup. No failed persistent write occurred in this test.
+
+Validation: 54 automated tests pass, including packet/key restrictions, capacity reply semantics, failed readback preventing live application, verified-save/live-failure recovery, explicit repair of a malformed stored blob, and recovery after server restart or worker timeout. JavaScript syntax passes. An actual server restart recovered the saved state, dongle selection, original backup and last filter JSON. Browser checks confirmed the saved-state message, enabled restoration, disabled fresh backup and no horizontal overflow at 1280 px. Acoustic response remains unmeasured. Reboot retention and wireless listening are pending the user's power-cycle test; no post-reboot apply should be sent before checking them.

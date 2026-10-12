@@ -1,6 +1,6 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
-const state = {token: null, status: {}, busy: false, compiled: null, signature: null, filters: [{type: 'peak', frequency: 1000, gain: -3, q: 1, enabled: true}]};
+const state = {token: null, status: {}, busy: false, compiled: null, signature: null, transportDirty: false, filters: [{type: 'peak', frequency: 1000, gain: -3, q: 1, enabled: true}]};
 const filterTypes = {peak: 'Peak', low_shelf: 'Low shelf', high_shelf: 'High shelf', low_pass: 'Low-pass', high_pass: 'High-pass'};
 const shelfQ = Math.SQRT1_2;
 const isPass = type => type === 'low_pass' || type === 'high_pass';
@@ -25,14 +25,22 @@ function setBusy(busy) { state.busy = busy; updateControls(); }
 function updateControls() {
   const current = isCurrent();
   const deviceAllowed = !!state.status.live_enabled && !!state.token;
+  const storage = state.status.storage_state || 'unchanged';
+  const untouched = state.status.live_state === 'unchanged' && storage === 'unchanged';
+  const uncertain = state.status.live_state === 'uncertain' || storage === 'uncertain';
+  const sameTransport = $('transport').value === (state.status.transport || 'usb');
+  const canWrite = !state.busy && deviceAllowed && state.status.backup_exists && sameTransport;
   $('compile').disabled = state.busy || !state.token || !state.status.dll_available;
   $('compile').textContent = state.busy ? 'Working…' : 'Compile preview';
   $('add').disabled = state.busy || state.filters.length >= 10;
   $('import').disabled = state.busy;
   $('export').disabled = state.busy;
-  $('read-device').disabled = state.busy || !deviceAllowed || state.status.live_state !== 'unchanged';
-  $('apply').disabled = state.busy || !deviceAllowed || !state.status.dll_available || state.status.live_state === 'uncertain' || !state.status.backup_exists || !current;
-  $('restore').disabled = state.busy || !deviceAllowed || !state.status.backup_exists;
+  $('transport').disabled = state.busy || !deviceAllowed || !untouched;
+  $('read-device').disabled = state.busy || !deviceAllowed || !untouched;
+  $('apply').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
+  $('save').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
+  $('restore').disabled = !canWrite || storage === 'uncertain';
+  $('restore-saved').disabled = !canWrite || storage === 'unchanged';
   $('download-compiled').disabled = state.busy || !current;
   $('preview-state').textContent = current ? 'Compiled preview · Not a measurement' : state.compiled ? 'Filters changed · Compile again' : 'Compile to preview';
   $('response-plot').style.opacity = state.compiled && !current ? '.4' : '1';
@@ -106,14 +114,22 @@ async function api(path, body) {
 async function refreshStatus() {
   const result = await api('/api/status');
   state.status = result; state.token = result.token;
+  const storage = result.storage_state || 'unchanged';
+  if (!state.transportDirty || result.live_state !== 'unchanged' || storage !== 'unchanged') {
+    $('transport').value = result.transport || 'usb';
+    state.transportDirty = false;
+  }
+  $('session-recovery').hidden = !result.session_recovered;
   const live = result.live_enabled && result.dll_available;
   $('connection').textContent = live ? 'Device access enabled' : 'Offline editor';
   $('connection').classList.toggle('ready', !!live);
   const device = typeof result.device === 'string' ? result.device : result.device?.name;
   $('device-state').textContent = !result.live_enabled
     ? 'Device access is disabled. You can edit filters and compile a preview offline.'
-    : result.live_state === 'uncertain' ? 'The last write was not confirmed. Restore the backup before applying again.'
-    : result.live_state === 'applied' ? 'Temporary EQ is active. Restore the backup before reading another preset.'
+    : storage === 'uncertain' ? 'The saved preset could not be verified. Use Restore saved profile to recover the original preset before making more changes.'
+    : result.live_state === 'uncertain' ? 'The live EQ write was not confirmed. Use Restore live backup before applying again.'
+    : storage === 'saved' ? 'Custom EQ is saved on the headset. Your original backup is retained. Restore saved profile restores both the saved preset and live EQ.'
+    : result.live_state === 'applied' ? 'Temporary EQ is active. You can save it to the headset, or restore the live backup before reading another preset.'
     : !result.dll_available ? 'The Audeze coefficient library is unavailable. Compilation is disabled; reading and restoring remain available.'
     : `${device ? device + '. ' : 'Device access is enabled. '}${result.backup_exists ? 'A preset backup is available.' : 'Choose a custom preset in Audeze HQ, then read it to create a backup.'}`;
   updateControls();
@@ -212,14 +228,23 @@ $('import-file').addEventListener('change', async event => {
   event.target.value = '';
 });
 $('download-compiled').addEventListener('click', () => { if (isCurrent()) download('maxwell-peq-compiled.json', state.compiled); });
+$('transport').addEventListener('change', () => {
+  state.transportDirty = true;
+  updateControls();
+  showMessage('Read and back up the preset through this connection before applying or saving EQ.');
+});
 for (const [id, endpoint, message] of [
   ['read-device', '/api/read_device', 'Current preset read and backed up.'],
   ['apply', '/api/apply', 'Temporary EQ sent. Listen at low volume to check the result.'],
-  ['restore', '/api/restore', 'Backup sent to the headset.']
+  ['save', '/api/save', 'Custom EQ saved, verified, and applied. The original backup is retained.'],
+  ['restore', '/api/restore', 'Original backup applied to live EQ.'],
+  ['restore-saved', '/api/restore_saved', 'Original saved preset and live EQ restored.']
 ]) {
   $(id).addEventListener('click', () => action(async () => {
-    if (id === 'apply' && (!$('editor').reportValidity() || !isCurrent())) throw new Error('Compile the current filters before applying.');
-    const result = await api(endpoint, id === 'apply' ? payload() : {});
+    const sendsFilters = id === 'apply' || id === 'save';
+    if (sendsFilters && (!$('editor').reportValidity() || !isCurrent())) throw new Error('Compile the current filters before applying or saving.');
+    const result = await api(endpoint, sendsFilters ? payload() : id === 'read-device' ? {transport: $('transport').value} : {});
+    if (id === 'read-device') state.transportDirty = false;
     $('details-content').textContent = JSON.stringify(result, null, 2);
     showMessage(result.message || (id === 'read-device' && result.backup_exists === false ? 'Preset read. Choose a custom preset in Audeze HQ, then read again to create a backup.' : message));
     await refreshStatus();

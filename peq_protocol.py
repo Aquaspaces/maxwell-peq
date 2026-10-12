@@ -1,6 +1,6 @@
 """Offline-derived Maxwell 1 RACE framing. This module never opens hardware.
 
-Evidence: PROOF.md and the local analysis paths listed there. No persistent write builder.
+Evidence: PROOF.md and the local analysis paths listed there.
 This is a proof of concept; an ACK establishes command acceptance, not acoustics.
 """
 from dataclasses import dataclass
@@ -43,6 +43,18 @@ def live_command(coefficients: bytes) -> bytes:
     return _packet(0x0E03, b"\x00" + coefficients)
 
 
+def storage_space_command() -> bytes:
+    # Firmware query only: returns whether an 844-byte NVDM value fits.
+    return _packet(0x0A03, struct.pack('<H', 844))
+
+
+def save_coefficients_command(slot: int, coefficients: bytes) -> bytes:
+    read_ui_command(slot)
+    if not isinstance(coefficients, bytes) or len(coefficients) != 844:
+        raise ProtocolError('Saved coefficients must be the 844-byte four-rate format')
+    return _packet(0x0A0D, struct.pack('<H', 0xE42C + slot) + coefficients)
+
+
 def check_packet(packet: bytes, kind: int) -> tuple[int, bytes]:
     if len(packet) < 6 or len(packet) > MAX_PACKET or packet[:2] != bytes((5, kind)):
         raise ProtocolError("Invalid RACE header")
@@ -52,8 +64,8 @@ def check_packet(packet: bytes, kind: int) -> tuple[int, bytes]:
     return command, packet[6:]
 
 
-def validate_request(packet: bytes, *, allow_live: bool = False) -> None:
-    """Exact command allowlist: no index writes, NVDM writes, or flash commands."""
+def validate_request(packet: bytes, *, allow_live: bool = False, allow_persistent: bool = False) -> None:
+    """Only reads, live EQ, and opt-in writes to the four coefficient keys."""
     command, payload = check_packet(packet, 0x5A)
     if packet == read_index_command():
         return
@@ -61,7 +73,11 @@ def validate_request(packet: bytes, *, allow_live: bool = False) -> None:
         return
     if allow_live and command == 0x0E03 and len(payload) > 1 and payload[0] == 0:
         return
-    raise ProtocolError("Command is outside the read/live-only allowlist")
+    if packet == storage_space_command():
+        return
+    if allow_persistent and command == 0x0A0D and len(payload) == 846 and 0xE42C <= struct.unpack_from('<H', payload)[0] <= 0xE42F:
+        return
+    raise ProtocolError("Command is outside the EQ allowlist")
 
 
 def parse_coefficients(packet: bytes, slot: int) -> bytes:
@@ -76,8 +92,8 @@ def parse_coefficients(packet: bytes, slot: int) -> bytes:
 
 
 def output_reports(packet: bytes, *, dongle: bool = False, report_size: int = REPORT_BYTES,
-                   allow_live: bool = False) -> list[bytes]:
-    validate_request(packet, allow_live=allow_live)
+                   allow_live: bool = False, allow_persistent: bool = False) -> list[bytes]:
+    validate_request(packet, allow_live=allow_live, allow_persistent=allow_persistent)
     if not REPORT_BYTES <= report_size <= 1024:
         raise ProtocolError("Unsupported HID report size")
     return [bytes((6, len(chunk), 0x80 if dongle else 0)) + chunk +
@@ -124,6 +140,22 @@ def parse_live_ack(packet: bytes) -> None:
         raise ProtocolError("Unexpected live-EQ acknowledgement")
     if payload[0] != 0:
         raise ProtocolError(f"Headset rejected live EQ (status {payload[0]})")
+
+
+def parse_storage_space(packet: bytes) -> bool:
+    command, payload = check_packet(packet, 0x5B)
+    if command != 0x0A03 or len(payload) != 1 or payload[0] not in (0, 1):
+        raise ProtocolError('Unexpected storage-space response')
+    return bool(payload[0])  # 1 means enough free space; this is not a status byte.
+
+
+def parse_save_ack(packet: bytes, slot: int) -> None:
+    read_ui_command(slot)
+    command, payload = check_packet(packet, 0x5B)
+    if command != 0x0A0D or len(payload) != 3 or payload[1:] != struct.pack('<H', 0xE42C + slot):
+        raise ProtocolError('Unexpected coefficient-save acknowledgement')
+    if payload[0] != 0:
+        raise ProtocolError(f'Headset rejected coefficient save (status {payload[0]})')
 
 
 @dataclass(frozen=True)

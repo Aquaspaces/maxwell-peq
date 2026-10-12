@@ -41,8 +41,19 @@
     </section>
 
     <section class="device-section" aria-labelledby="device-heading">
-      <div class="device-copy"><h2 id="device-heading">Headset controls</h2><p id="device-state">Checking connection…</p><p>Select a custom preset in Audeze HQ, then fully quit HQ, including its tray icon. Read and back up the preset before applying temporary EQ.</p></div>
-      <div class="device-actions"><button type="button" id="read-device" disabled>Read &amp; back up preset</button><button type="button" id="apply" disabled>Apply temporarily</button><button type="button" class="quiet" id="restore" disabled>Restore backup</button></div>
+      <div class="device-copy">
+        <h2 id="device-heading">Headset controls</h2>
+        <p id="device-state">Checking connection…</p>
+        <div class="transport-control"><label for="transport">Connection</label><select id="transport" disabled><option value="usb">USB cable</option><option value="dongle">Wireless dongle</option></select></div>
+        <p>Select a custom preset in Audeze HQ, then fully quit HQ, including its tray icon. For the dongle, keep the headset powered on and paired. Read and back up the preset before applying EQ.</p>
+        <p id="save-help">Save to headset overwrites the active custom preset and keeps your original backup. Audeze HQ’s sliders will not represent these filters; editing them in HQ can replace your EQ.</p>
+        <p id="session-recovery" hidden>The previous session and its original backup were recovered. Your editor filters have not been changed.</p>
+      </div>
+      <div class="device-actions">
+        <button type="button" id="read-device" disabled>Read &amp; back up preset</button>
+        <div class="device-action-pair"><button type="button" id="apply" disabled>Apply temporarily</button><button type="button" class="quiet" id="restore" disabled>Restore live backup</button></div>
+        <div class="device-action-pair"><button type="button" id="save" aria-describedby="save-help" disabled>Save to headset</button><button type="button" class="quiet" id="restore-saved" disabled>Restore saved profile</button></div>
+      </div>
     </section>
     <div id="message" role="status" aria-live="polite" hidden></div>
     <details class="details"><summary>Compiled data &amp; device details</summary><pre id="details-content">Compile a preview or read the headset to inspect the result.</pre><button type="button" class="quiet" id="download-compiled" disabled>Download compiled JSON</button></details>

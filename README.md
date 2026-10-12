@@ -1,6 +1,6 @@
 # Maxwell PEQ proof of concept
 
-Local Windows editor for up to ten filters on the **original Maxwell PlayStation**, connected directly by USB-C. Supports peaks, low/high shelves and low/high-pass filters. Includes calculated response plots, automatic preamp headroom, JSON import/export, temporary apply, and restoration from exact saved coefficient bytes.
+Local Windows editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters. Includes calculated response plots, automatic preamp headroom, JSON import/export, temporary apply, persistent headset saves with exact readback, and restoration from the original saved coefficient bytes.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. Exact acoustic response has not been measured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -17,16 +17,24 @@ Open http://127.0.0.1:8769. Omit `--enable-live` for compilation and preview onl
 
 ## Try a temporary filter
 
-1. Connect the original PS headset directly with USB-C. The dongle is not supported by this build.
+1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. Choose the matching connection in the editor.
 2. In Audeze HQ, select one of the four custom presets. Fully quit HQ, including its tray process. The editor requires exclusive access to the headset control interface because concurrent readers consume each other's response fragments.
 3. In the local editor, click **Read & back up preset**. It saves exact coefficients under `backups/`. Built-in presets are readable, but applying requires a custom preset.
 4. Set frequency, gain and Q, then **Compile preview**. The default is a gentle 1 kHz, -3 dB, Q 1 peak. The four curves show the decoded fixed-point coefficients, including preamp.
 5. At low listening volume, click **Apply temporarily**. An acknowledgement means the headset accepted the command; it is not an audio measurement.
-6. Click **Restore backup** to reapply the original saved coefficients. Reselecting the saved preset in HQ also provides a recovery path if the server was closed.
+6. Click **Restore live backup** to reapply the original saved coefficients without changing headset storage.
 
-No preset-selection, persistent EQ write, or firmware-flash command is implemented. Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or restore. Avoid changing presets in HQ during a test.
+Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Avoid changing presets in HQ during a test. Preset selection and firmware flashing are not implemented.
 
-If a write times out, the editor blocks further Apply operations and offers Restore. A confirmed pre-send preset change clears the stale backup so a fresh read is possible. Backups survive a restart on disk, but this version does not import them into a new session: reselect the saved preset in HQ before beginning another session.
+## Save a persistent profile
+
+After reading a backup and compiling, click **Save to headset**. This overwrites the active custom slot's four coefficient banks, reads them back byte for byte, then applies the same EQ live. **Restore saved profile** writes the original backup back to that slot, verifies it, and applies it. **Restore live backup** only changes the current sound; a saved custom EQ remains in storage.
+
+HQ's ten slider records are left unchanged because they cannot describe these custom filters. Its sliders will show old values, and editing them can replace the saved EQ. Keep filter JSON exports for editable profiles; the raw backup preserves the exact original sound but cannot reconstruct arbitrary filter settings.
+
+The server journals each write before sending it and recovers the session, connection and original backup after restart. If a write times out, further Apply/Save operations are blocked until restoration. Saved-profile recovery permits replacing an uncertain stored blob, while still checking the interface, custom slot and UI records. To change connections or take a new backup, first restore the existing session. All backups and write records stay under ignored `backups/`; keep that directory for recovery.
+
+Hardware testing on 2026-10-12 confirmed dongle reads, a persistent save to Custom 4 with all 844 bytes matching, and live-apply acknowledgement. Reboot and wireless listening results are recorded in [PROOF.md](PROOF.md). [examples/obvious-persistence.json](examples/obvious-persistence.json) contains the deliberately exaggerated two-cut test profile.
 
 ## Supported values and limits
 
@@ -47,7 +55,7 @@ python -m unittest discover -s tests -v
 node --check web/app.js
 ```
 
-Tests cover the vendor math against reference responses, Q width, coefficient packing, packet allowlists, fragmented HID messages, malformed replies and recovery state transitions. Tests never send hardware writes. Vendor tests need the inspected DLL; other tests run without it.
+Tests cover the vendor math against reference responses, Q width, coefficient packing, packet allowlists, fragmented HID messages, malformed replies, storage capacity/acknowledgement parsing, exact readback, and recovery across server restarts and uncertain writes. Tests never send hardware writes. Vendor tests need the inspected DLL; other tests run without it.
 
 `peq.py` also accepts a preset JSON object on stdin and emits compiled JSON on stdout. See `examples/one-peak.json`. Compilation and native HID operations run in bounded subprocesses because a native driver or DLL can stall.
 
@@ -55,8 +63,8 @@ Tests cover the vendor math against reference responses, Q width, coefficient pa
 
 Each row accepts `type`: `peak`, `low_shelf`, `high_shelf`, `low_pass`, or `high_pass`. Missing type and legacy `PK` mean peak. Shelves may omit Q; pass filters may omit gain and Q. See [examples/shelf-and-pass.json](examples/shelf-and-pass.json). Importing/exporting retains filter types; these files are stored on the computer, not saved into headset flash.
 
-## Coefficient paths and planned support
+## Coefficient paths
 
 Peak/pass-only sets use the inspected vendor DLL, including its native `set_xpf_point` function. Any enabled shelf switches the whole cascade to an RBJ encoder using the same verified 24-bit numeric layout. That encoder bounds individual stage gain, retains the vendor's first-stage attenuation margin, and compensates in the global scale. All four sample-rate banks are checked after encoding. The original peak-only example remains byte-identical to the listening-tested build.
 
-Persistent headset profiles and dongle control remain future work. The storage keys and routing flag have been identified, but saved-profile behavior across reboot and wireless playback still needs testing. This build exposes temporary direct-USB apply only.
+Dongle requests use the headset route flag `0x80`. Persistent writes are restricted to the four custom coefficient keys `E42C` through `E42F`; arbitrary storage writes, erase commands and firmware operations are excluded.

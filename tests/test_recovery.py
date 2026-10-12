@@ -42,7 +42,7 @@ class RecoveryTests(unittest.TestCase):
         with patch('server.worker', return_value={}) as worker:
             self.app.perform('/api/restore', {})
             worker.assert_called_once_with('device_worker.py', {
-                'operation': 'apply', 'blob_hex': '1122', 'expected': self.snapshot})
+                'operation': 'apply', 'blob_hex': '1122', 'expected': self.snapshot, 'transport': 'usb'})
         self.assertEqual(self.app.live_state, 'unchanged')
 
     def test_unacknowledged_write_retains_backup(self):
