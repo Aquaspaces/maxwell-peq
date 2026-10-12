@@ -59,6 +59,9 @@ if __name__ == '__main__':
     try:
         json.dump(execute(json.load(sys.stdin)), sys.stdout)
     except Exception as error:
-        json.dump({'error': str(error), 'write_started': WRITE_STARTED,
+        message = str(error)
+        if not WRITE_STARTED and 'No EQ was sent' not in message:
+            message += ' No EQ was sent.'
+        json.dump({'error': message, 'write_started': WRITE_STARTED,
                    'state_changed': isinstance(error, StateChanged)}, sys.stdout)
         sys.exit(1)

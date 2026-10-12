@@ -118,10 +118,21 @@ class MaxwellPsHid:
         if len(candidates) != 1:
             raise OSError(f"Expected one original Maxwell PlayStation USB-C interface, found {len(candidates)}")
         self.path, self.input_size, self.output_size, self.device_version = candidates[0]
-        self.handle = self.create(self.path, 0xC0000000, 3, None, 3, 0, None)
-        if self.handle == invalid:
+        self._open_control()
+
+    def _open_control(self):
+        # RACE replies are a device-wide byte stream. Shared handles let HQ (or
+        # another worker) consume fragments, so own this collection exclusively
+        # for the entire snapshot / apply / acknowledgement transaction.
+        self.handle = self.create(self.path, 0xC0000000, 0, None, 3, 0, None)
+        if self.handle == C.c_void_p(-1).value:
+            error = C.get_last_error()
             self.handle = None
-            raise C.WinError(C.get_last_error())
+            if error == 32:  # ERROR_SHARING_VIOLATION
+                raise OSError('The headset control interface is busy. Fully quit Audeze HQ '
+                              '(including its tray icon) and other Maxwell tools, then retry. '
+                              'No EQ was sent.')
+            raise C.WinError(error)
 
     def close(self):
         if self.handle is not None:

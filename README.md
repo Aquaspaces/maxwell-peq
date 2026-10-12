@@ -18,7 +18,7 @@ Open http://127.0.0.1:8769. Omit `--enable-live` for compilation and preview onl
 ## Try a temporary filter
 
 1. Connect the original PS headset directly with USB-C. The dongle is not supported by this build.
-2. In Audeze HQ, select one of the four custom presets. Close HQ so it does not compete for HID responses.
+2. In Audeze HQ, select one of the four custom presets. Fully quit HQ, including its tray process. The editor requires exclusive access to the headset control interface because concurrent readers consume each other's response fragments.
 3. In the local editor, click **Read & back up preset**. It saves exact coefficients under `backups/`. Built-in presets are readable, but applying requires a custom preset.
 4. Set frequency, gain and Q, then **Compile preview**. The default is a gentle 1 kHz, -3 dB, Q 1 peak. The four curves show the decoded fixed-point coefficients, including preamp.
 5. At low listening volume, click **Apply temporarily**. An acknowledgement means the headset accepted the command; it is not an audio measurement.
