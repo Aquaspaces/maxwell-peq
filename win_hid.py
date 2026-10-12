@@ -199,6 +199,20 @@ class MaxwellPsHid:
             raise C.WinError(C.get_last_error())
         return bytes(report)
 
+    def _drain(self):
+        # Reconnects can leave delayed fragments and notifications in the queue.
+        # One empty poll does not establish that the previous stream has ended.
+        empty_polls = 0
+        for _ in range(100):
+            report = self._input()
+            if report[0] != 7 or report[1] > 59:
+                raise ProtocolError('Malformed report while draining input')
+            empty_polls = empty_polls + 1 if report[1] == 0 else 0
+            if empty_polls >= 6:
+                return
+            time.sleep(0.01)
+        raise ProtocolError('Input queue did not drain; no command sent')
+
     def transact(self, packet: bytes, *, timeout=None) -> bytes:
         validate_request(packet, allow_live=self.allow_live, allow_persistent=self.allow_persistent)
         if not self.handle:
@@ -209,15 +223,7 @@ class MaxwellPsHid:
         command, _ = check_packet(packet, 0x5A)
         with self._lock:
             # Empty old responses before writing. Failure to empty aborts the write.
-            for _ in range(100):
-                report = self._input()
-                if report[0] != 7 or report[1] > 59:
-                    raise ProtocolError("Malformed report while draining input")
-                if report[1] == 0:
-                    break
-                time.sleep(0.01)
-            else:
-                raise ProtocolError("Input queue did not drain; no command sent")
+            self._drain()
             for report in output_reports(packet, dongle=self.transport == 'dongle', report_size=self.output_size,
                                          allow_live=self.allow_live, allow_persistent=self.allow_persistent):
                 raw = (C.c_ubyte * len(report)).from_buffer_copy(report)

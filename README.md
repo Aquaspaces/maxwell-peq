@@ -34,7 +34,7 @@ HQ's ten slider records are left unchanged because they cannot describe these cu
 
 The server journals each write before sending it and recovers the session, connection and original backup after restart. If a write times out, further Apply/Save operations are blocked until restoration. Saved-profile recovery permits replacing an uncertain stored blob, while still checking the interface, custom slot and UI records. To change connections or take a new backup, first restore the existing session. All backups and write records stay under ignored `backups/`; keep that directory for recovery.
 
-Hardware testing on 2026-10-12 confirmed dongle reads, a persistent save to Custom 4 with all 844 bytes matching, and live-apply acknowledgement. Reboot and wireless listening results are recorded in [PROOF.md](PROOF.md). [examples/obvious-persistence.json](examples/obvious-persistence.json) contains the deliberately exaggerated two-cut test profile.
+Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, exact 844-byte readback after powering the headset off/on with USB unplugged, and user-reported audible EQ retention during wireless playback. See [PROOF.md](PROOF.md). [examples/obvious-persistence.json](examples/obvious-persistence.json) contains the deliberately exaggerated two-cut test profile.
 
 ## Supported values and limits
 
