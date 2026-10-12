@@ -15,7 +15,7 @@
       <span class="status-badge" id="connection">Connecting to local server</span>
     </header>
 
-    <div class="intro"><strong>Parametric EQ proof of concept.</strong> Set the frequency, gain, and Q of each peak filter. Live filtering has been confirmed by listening on this headset; the exact response has not been measured.</div>
+    <div class="intro"><strong>Parametric EQ proof of concept.</strong> Peak filters have been confirmed by listening on this headset; the exact response has not been measured. Shelf and pass filters are experimental and have not yet been verified on the headset.</div>
 
     <section class="response-section" aria-labelledby="response-heading">
       <div class="section-heading"><h2 id="response-heading">Frequency response</h2><span id="preview-state" class="muted">Compile to preview</span></div>
@@ -24,19 +24,20 @@
         <p id="plot-empty">Your compiled response will appear here.</p>
       </div>
       <div class="plot-footer"><span id="curve-legend">20 Hz–20 kHz · Logarithmic frequency</span><span id="compile-summary" class="muted">No coefficients compiled</span></div>
+      <p id="plot-clipping" class="editor-note" hidden>Response below −120 dB is clipped from the plot.</p>
     </section>
 
     <section class="editor-section" aria-labelledby="filters-heading">
-      <div class="section-heading"><h2 id="filters-heading">Peak filters <span id="filter-count" class="count">1 / 10</span></h2><div class="button-group"><button type="button" class="quiet" id="import">Import JSON</button><button type="button" class="quiet" id="export">Export JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
+      <div class="section-heading"><h2 id="filters-heading">Filters <span id="filter-count" class="count">1 / 10</span></h2><div class="button-group"><button type="button" class="quiet" id="import">Import JSON</button><button type="button" class="quiet" id="export">Export JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
       <form id="editor">
-        <div class="table-wrap"><table><thead><tr><th scope="col">On</th><th scope="col">Filter</th><th scope="col">Frequency <span>Hz</span></th><th scope="col">Gain <span>dB</span></th><th scope="col">Q</th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead><tbody id="filter-rows"></tbody></table></div>
-        <button type="button" class="quiet add-filter" id="add">+ Add peak filter</button>
+        <div class="table-wrap"><table><thead><tr><th scope="col">On</th><th scope="col">Filter</th><th scope="col">Type</th><th scope="col">Frequency <span>Hz</span></th><th scope="col">Gain <span>dB</span></th><th scope="col">Q</th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead><tbody id="filter-rows"></tbody></table></div>
+        <button type="button" class="quiet add-filter" id="add">+ Add filter</button>
         <div class="compile-bar">
           <div class="preamp-controls"><label for="preamp-mode">Preamp</label><select id="preamp-mode"><option value="auto">Auto headroom</option><option value="manual">Manual</option></select><label class="manual-preamp" id="manual-preamp" hidden><span class="sr-only">Preamp in dB</span><input id="preamp-value" type="number" min="-60" max="0" step="any" value="0"><span>dB</span></label><span id="preamp-result" class="muted"></span></div>
           <button type="submit" class="primary" id="compile">Compile preview</button>
         </div>
       </form>
-      <p class="editor-note">Higher Q makes a narrower filter. The compiler converts Q to bandwidth using frequency ÷ Q.</p>
+      <p class="editor-note">Peak: higher Q makes a narrower filter. Pass: 12 dB/octave, with adjustable Q; higher Q adds resonance near the cutoff. Shelves: fixed slope S = 1, with adjustable frequency and gain.</p>
     </section>
 
     <section class="device-section" aria-labelledby="device-heading">

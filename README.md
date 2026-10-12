@@ -1,6 +1,6 @@
 # Maxwell PEQ proof of concept
 
-Local Windows editor for up to ten peaking filters on the **original Maxwell PlayStation**, connected directly by USB-C. Each filter has an arbitrary frequency, gain and Q. Includes calculated response plots, automatic preamp headroom, JSON import/export, temporary apply, and restoration from exact saved coefficient bytes.
+Local Windows editor for up to ten filters on the **original Maxwell PlayStation**, connected directly by USB-C. Supports peaks, low/high shelves and low/high-pass filters. Includes calculated response plots, automatic preamp headroom, JSON import/export, temporary apply, and restoration from exact saved coefficient bytes.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. Exact acoustic response has not been measured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -30,10 +30,13 @@ If a write times out, the editor blocks further Apply operations and offers Rest
 
 ## Supported values and limits
 
-- 1-10 peak filters; 20-20,000 Hz; -12 to +12 dB; Q 0.1-20. Disabled rows are replaced with unity filters.
-- High/low-pass and shelf filters are not implemented.
-- Auto preamp subtracts the sum of positive gains. Manual preamp must provide at least that much headroom; maximum attenuation is 60 dB.
-- Compilation checks pole stability and compares quantized response against an independent RBJ reference. It rejects sampled errors over 0.15 dB. Some low-frequency or high-Q combinations exceed this limit; the UI reports the failure instead of sending them.
+- 1-10 filters of any supported type; 20-20,000 Hz. Disabled rows are replaced with unity filters.
+- Peaks: -12 to +12 dB, Q 0.1-20. This path has user listening confirmation.
+- Low/high shelves: -12 to +12 dB, fixed monotonic slope S=1 (Q approximately 0.7071). Frequency sets the shelf midpoint. Shelf slope is not adjustable in this version.
+- Low/high-pass: second order (12 dB/octave asymptotic slope), Q 0.1-20. Gain is unused and must be 0. Q approximately 0.7071 gives the Butterworth response; larger Q adds resonance near the cutoff.
+- **Shelf and pass filters are experimental:** numerical checks pass, but they have not yet been confirmed by listening on the headset. The type selector and compiled result identify them.
+- Auto preamp subtracts the sum of each filter's maximum boost, including pass-filter resonance. Manual preamp must provide at least that much headroom; maximum attenuation is 60 dB.
+- Compilation checks pole stability and compares decoded quantized response against the RBJ reference. It rejects sampled errors over 0.15 dB. For shelf/pass sets, comparisons floor both curves at -90 dB to handle deep stopband nulls and also check DC/Nyquist and pass-filter resonance. Some low-frequency or high-Q combinations exceed the precision limit; the UI reports the failure instead of sending them.
 - Banks: 44.1, 48, 88.2 and 96 kHz. Firmware version is not identified; USB device revision is not treated as firmware version.
 - Loopback only, per-process request token, same-origin checks, and one serialized device operation. No telemetry or external assets.
 
@@ -47,3 +50,13 @@ node --check web/app.js
 Tests cover the vendor math against reference responses, Q width, coefficient packing, packet allowlists, fragmented HID messages, malformed replies and recovery state transitions. Tests never send hardware writes. Vendor tests need the inspected DLL; other tests run without it.
 
 `peq.py` also accepts a preset JSON object on stdin and emits compiled JSON on stdout. See `examples/one-peak.json`. Compilation and native HID operations run in bounded subprocesses because a native driver or DLL can stall.
+
+## Filter JSON
+
+Each row accepts `type`: `peak`, `low_shelf`, `high_shelf`, `low_pass`, or `high_pass`. Missing type and legacy `PK` mean peak. Shelves may omit Q; pass filters may omit gain and Q. See [examples/shelf-and-pass.json](examples/shelf-and-pass.json). Importing/exporting retains filter types; these files are stored on the computer, not saved into headset flash.
+
+## Coefficient paths and planned support
+
+Peak/pass-only sets use the inspected vendor DLL, including its native `set_xpf_point` function. Any enabled shelf switches the whole cascade to an RBJ encoder using the same verified 24-bit numeric layout. That encoder bounds individual stage gain, retains the vendor's first-stage attenuation margin, and compensates in the global scale. All four sample-rate banks are checked after encoding. The original peak-only example remains byte-identical to the listening-tested build.
+
+Persistent headset profiles and dongle control remain future work. The storage keys and routing flag have been identified, but saved-profile behavior across reboot and wireless playback still needs testing. This build exposes temporary direct-USB apply only.

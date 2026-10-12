@@ -1,4 +1,4 @@
-"""Offline Maxwell peaking EQ compiler. Vendor math DLL only; no device I/O."""
+"""Offline Maxwell EQ compiler. No device I/O."""
 from __future__ import annotations
 
 import cmath
@@ -10,10 +10,14 @@ import os
 from pathlib import Path
 import struct
 
+from extended_filters import rbj_biquad, filter_headroom_db, encode_bank
+
 DLL_SHA256 = '322ac1149eeba9ed55f2466ba706edc92dcdb333cf574a6466abf88e4b3d50be'
 DEFAULT_DLL = Path('X:/audeze-re/extract/audeze-app/AirohaPeqLibrary.dll')
 RATES = ((1, 44100), (2, 48000), (5, 88200), (6, 96000))
 MAX_BANDS = 10
+FILTER_TYPES = ('peak', 'low_shelf', 'high_shelf', 'low_pass', 'high_pass')
+SHELF_Q = math.sqrt(0.5)
 
 
 def dll_path():
@@ -43,21 +47,30 @@ def validate(request):
         raise ValueError('A preset must be a JSON object.')
     rows = request.get('filters')
     if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_BANDS:
-        raise ValueError('Use between 1 and 10 peaking filters.')
+        raise ValueError('Use between 1 and 10 filters.')
     filters = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(f'Filter {i + 1} must be an object.')
-        if row.get('type', 'peak') not in ('peak', 'PK'):
-            raise ValueError('This proof of concept supports peaking filters only.')
+        kind = row.get('type', 'peak')
+        kind = 'peak' if kind == 'PK' else kind
+        if kind not in FILTER_TYPES:
+            raise ValueError(f'Unsupported filter type: {kind}.')
         enabled = row.get('enabled', True)
         if not isinstance(enabled, bool):
             raise ValueError('Enabled must be true or false.')
-        filters.append(dict(frequency=number(row.get('frequency'), 'Frequency', 20, 20000),
-                            gain=number(row.get('gain'), 'Gain', -12, 12),
-                            q=number(row.get('q'), 'Q', 0.1, 20), enabled=enabled))
-    # Sum of positive peaks bounds the cascade gain, unlike a sampled peak estimate.
-    headroom = sum(max(0, f['gain']) for f in filters if f['enabled'])
+        is_pass = kind in ('low_pass', 'high_pass')
+        is_shelf = kind in ('low_shelf', 'high_shelf')
+        gain = number(row.get('gain', 0 if is_pass else None), 'Gain', -12, 12)
+        q = number(row.get('q', SHELF_Q if is_shelf or is_pass else None), 'Q', 0.1, 20)
+        if is_pass and gain != 0:
+            raise ValueError('Pass filters do not use gain; set gain to 0.')
+        if is_shelf and not math.isclose(q, SHELF_Q, abs_tol=1e-5):
+            raise ValueError('Shelf filters use fixed slope S=1 (Q=0.70710678).')
+        filters.append(dict(type=kind, frequency=number(row.get('frequency'), 'Frequency', 20, 20000),
+                            gain=gain, q=SHELF_Q if is_shelf else q, enabled=enabled))
+    # Analytical per-stage bounds include resonant pass filters; no sampled estimate.
+    headroom = sum(filter_headroom_db(f) for f in filters if f['enabled'])
     requested = request.get('preamp', 'auto')
     preamp = -headroom if requested == 'auto' else number(requested, 'Preamp', -60, 0)
     if preamp < -60:
@@ -115,6 +128,7 @@ class VendorCompiler:
         definitions = {
             'setParam': ([C.c_int, C.c_double, C.c_int, C.c_int, C.c_int, C.c_int], None),
             'set_peq_point': ([C.c_int, C.c_int, C.c_double, C.c_double, C.c_double], None),
+            'set_xpf_point': ([C.c_int, C.c_int, C.c_double, C.c_double, C.c_int], None),
             'generate_cofe': ([C.c_int], None),
             'change_rescale_cofe': ([C.c_int, C.c_double], None),
             'get_cofe_count': ([C.c_int], C.c_ushort),
@@ -132,7 +146,13 @@ class VendorCompiler:
             for i in range(MAX_BANDS):
                 f = filters[i] if i < len(filters) and filters[i]['enabled'] else dict(frequency=1000., gain=0., q=1.)
                 # Static evidence: alpha = sin(omega) / (2 * (frequency / width)).
-                lib.set_peq_point(0, i, f['frequency'], f['gain'], f['frequency'] / f['q'])
+                kind = f.get('type', 'peak')
+                if kind in ('low_pass', 'high_pass'):
+                    lib.set_xpf_point(0, i, f['frequency'], f['q'], 1 if kind == 'low_pass' else 2)
+                elif kind == 'peak':
+                    lib.set_peq_point(0, i, f['frequency'], f['gain'], f['frequency'] / f['q'])
+                else:
+                    raise ValueError('Shelf filters require the extended encoder.')
             lib.generate_cofe(0)
             lib.change_rescale_cofe(0, preamp)
             count = lib.get_cofe_count(0)
@@ -146,6 +166,8 @@ class VendorCompiler:
 def compile_preset(request):
     filters, preamp = validate(request)
     compiler = VendorCompiler()
+    extended = any(f['enabled'] and f['type'] in ('low_shelf', 'high_shelf') for f in filters)
+    experimental = any(f['enabled'] and f['type'] != 'peak' for f in filters)
     banks, curves = [], []
     blob = bytearray(struct.pack('<I', len(RATES)))
     # Dense log grid plus center/near-center probes detects narrow-filter errors.
@@ -156,19 +178,28 @@ def compile_preset(request):
     frequencies = sorted(frequencies)
     max_error = 0.
     for rate_id, rate in RATES:
-        words = compiler.bank(filters, preamp, rate)
+        words = encode_bank(filters, preamp, rate) if extended else compiler.bank(filters, preamp, rate)
         stages, scale = decode_words(words)
-        ideal = [biquad(f['frequency'], f['gain'], f['q'], rate) for f in filters if f['enabled']]
+        ideal = [rbj_biquad(f, rate) for f in filters if f['enabled']]
         points, error = [], 0.
-        for frequency in frequencies:
+        probes = set(frequencies)
+        for f in filters:
+            if f['enabled'] and f['type'] in ('low_pass', 'high_pass') and f['q'] > SHELF_Q:
+                ratio = math.sqrt(1 - 1 / (2 * f['q'] ** 2))
+                ratio = ratio if f['type'] == 'low_pass' else 1 / ratio
+                probes.add(rate / math.pi * math.atan(math.tan(math.pi * f['frequency'] / rate) * ratio))
+        # Endpoints check shelf plateaus / passband gain; floor makes deep stopband
+        # nulls meaningful to compare without dividing by a nearly-zero response.
+        for frequency in sorted(probes | ({0., rate / 2} if experimental else set())):
             actual = response(stages, scale, frequency, rate)
             expected = response(ideal, 10 ** (preamp / 20), frequency, rate)
-            error = max(error, abs(actual - expected))
-            points.append([frequency, actual])
+            error = max(error, abs(max(actual, -90) - max(expected, -90)) if experimental else abs(actual - expected))
+            if actual > 0.15:
+                raise ValueError('Compiled response exceeds available headroom.')
+            if 20 <= frequency <= 20000:
+                points.append([frequency, actual])
         if error > 0.15:
-            raise ValueError(f'Coefficient precision error is {error:.3f} dB at {rate} Hz; reduce Q or use a higher frequency.')
-        if max(db for _, db in points) > 0.15:
-            raise ValueError('Compiled response exceeds available headroom.')
+            raise ValueError(f'Coefficient precision error is {error:.3f} dB at {rate} Hz; try a higher frequency, smaller gain, or lower Q where adjustable.')
         max_error = max(max_error, error)
         banks.append(dict(id=rate_id, rate=rate, words=words))
         curves.append(dict(rate=rate, points=points, max_error_db=error))
@@ -178,7 +209,9 @@ def compile_preset(request):
         raise ValueError('Unexpected multi-rate payload size.')
     return dict(filters=filters, preamp=preamp, banks=banks, curves=curves,
                 max_error_db=max_error, blob_hex=blob.hex(), sha256=hashlib.sha256(blob).hexdigest(),
-                dll_sha256=DLL_SHA256, hardware_verified=False)
+                dll_sha256=DLL_SHA256, hardware_verified=False,
+                experimental_filters=experimental, engine='extended-rbj' if extended else 'vendor',
+                error_floor_db=-90 if experimental else None)
 
 
 if __name__ == '__main__':

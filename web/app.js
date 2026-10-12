@@ -1,6 +1,10 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
-const state = {token: null, status: {}, busy: false, compiled: null, signature: null, filters: [{frequency: 1000, gain: -3, q: 1, enabled: true}]};
+const state = {token: null, status: {}, busy: false, compiled: null, signature: null, filters: [{type: 'peak', frequency: 1000, gain: -3, q: 1, enabled: true}]};
+const filterTypes = {peak: 'Peak', low_shelf: 'Low shelf', high_shelf: 'High shelf', low_pass: 'Low-pass', high_pass: 'High-pass'};
+const shelfQ = Math.SQRT1_2;
+const isPass = type => type === 'low_pass' || type === 'high_pass';
+const isShelf = type => type === 'low_shelf' || type === 'high_shelf';
 const curveColors = ['#195fa5', '#ae5c26', '#337557', '#784a91'];
 
 function showMessage(text, error = false) {
@@ -52,12 +56,36 @@ function renderFilters() {
     enabled.addEventListener('change', () => { filter.enabled = enabled.checked; row.className = enabled.checked ? '' : 'disabled-row'; changed(); });
     onCell.append(enabled); row.append(onCell);
     const label = document.createElement('td'); label.className = 'filter-label'; label.textContent = String(index + 1).padStart(2, '0'); row.append(label);
+    const typeCell = document.createElement('td'); const typeSelect = document.createElement('select');
+    typeSelect.setAttribute('aria-label', `Filter type, filter ${index + 1}`);
+    for (const [value, text] of Object.entries(filterTypes)) {
+      const option = document.createElement('option'); option.value = value; option.textContent = text; typeSelect.append(option);
+    }
+    typeSelect.value = filter.type || 'peak';
+    typeSelect.addEventListener('change', () => {
+      filter.type = typeSelect.value;
+      if (isPass(filter.type)) { filter.gain = 0; filter.q = shelfQ; }
+      else if (isShelf(filter.type)) filter.q = shelfQ;
+      renderFilters(); changed();
+      $('filter-rows').children[index].querySelector('select').focus();
+    });
+    typeCell.append(typeSelect); row.append(typeCell);
     for (const [key, title, min, max] of [['frequency', 'Frequency in Hz', 20, 20000], ['gain', 'Gain in dB', -12, 12], ['q', 'Q factor', 0.1, 20]]) {
       const cell = document.createElement('td'); const input = document.createElement('input');
       Object.assign(input, {type: 'number', value: filter[key], min: String(min), max: String(max), step: 'any', required: true});
       input.setAttribute('aria-label', `${title}, filter ${index + 1}`);
+      if (key === 'gain' && isPass(filter.type)) {
+        input.disabled = true; input.title = 'Pass filters do not use a gain setting.';
+      }
+      if (key === 'q' && isShelf(filter.type)) {
+        input.disabled = true; input.value = '0.7071'; input.title = 'Shelf slope is fixed at S = 1. Q is not adjustable for shelves.';
+      }
       input.addEventListener('input', () => { filter[key] = input.value === '' ? null : Number(input.value); changed(); });
-      cell.append(input); row.append(cell);
+      cell.append(input);
+      if (key === 'q' && isShelf(filter.type)) {
+        const note = document.createElement('small'); note.className = 'fixed-value-note'; note.textContent = 'Fixed slope S = 1'; cell.append(note);
+      }
+      row.append(cell);
     }
     const removeCell = document.createElement('td'); const remove = document.createElement('button');
     remove.type = 'button'; remove.className = 'quiet remove'; remove.setAttribute('aria-label', `Remove filter ${index + 1}`);
@@ -103,7 +131,9 @@ function plot(curves = []) {
   const left = 40, right = width - 23, top = 20, bottom = height - 36;
   const points = curves.flatMap(c => c.points || []).filter(p => Number.isFinite(p[1]));
   const values = points.map(p => p[1]);
-  const yMin = Math.min(-12, Math.floor(Math.min(0, ...values) / 6) * 6);
+  const floor = -120;
+  const clipped = values.some(db => db < floor);
+  const yMin = Math.max(floor, Math.min(-12, Math.floor(Math.min(0, ...values) / 6) * 6));
   const yMax = Math.max(6, Math.ceil(Math.max(0, ...values) / 6) * 6);
   const x = f => left + Math.log10(f / 20) / 3 * (right - left);
   const y = db => top + (yMax - db) / (yMax - yMin) * (bottom - top);
@@ -123,6 +153,7 @@ function plot(curves = []) {
     svg.append(svgElement('path', {d, fill: 'none', stroke: curveColors[index % curveColors.length], 'stroke-width': 2.2, 'stroke-linejoin': 'round', 'clip-path': 'url(#plot-clip)', ...(index ? {'stroke-dasharray': '7 4'} : {})}));
   });
   $('plot-empty').hidden = curves.length > 0;
+  $('plot-clipping').hidden = !clipped;
   svg.setAttribute('aria-label', curves.length ? `Calculated frequency response of ${curves.length} sample-rate banks, including preamp. Not measured on the headset.` : 'Frequency response plot. Compile filters to show the calculated response.');
   $('curve-legend').replaceChildren();
   curves.forEach((curve, index) => {
@@ -145,11 +176,12 @@ $('editor').addEventListener('submit', event => {
     plot(result.curves || []);
     $('preamp-result').textContent = `${Number(result.preamp).toFixed(2)} dB`;
     $('compile-summary').textContent = Number.isFinite(result.max_error_db) ? `Fit error ≤ ${result.max_error_db.toFixed(3)} dB` : 'Coefficients compiled';
+    if (result.experimental_filters) $('compile-summary').textContent += ' · Experimental filters';
     $('details-content').textContent = JSON.stringify(result, null, 2);
     showMessage('Preview compiled. Nothing has been sent to the headset.');
   });
 });
-$('add').addEventListener('click', () => { if (state.filters.length < 10) { state.filters.push({frequency: 1000, gain: 0, q: 1, enabled: true}); renderFilters(); changed(); } });
+$('add').addEventListener('click', () => { if (state.filters.length < 10) { state.filters.push({type: 'peak', frequency: 1000, gain: 0, q: 1, enabled: true}); renderFilters(); changed(); } });
 $('preamp-mode').addEventListener('change', changed);
 $('preamp-value').addEventListener('input', changed);
 $('export').addEventListener('click', () => { if ($('editor').reportValidity()) download('maxwell-peq.json', payload()); });
@@ -159,13 +191,20 @@ $('import-file').addEventListener('change', async event => {
   try {
     if (file.size > 100000) throw new Error('This file is too large. Import a filter JSON file under 100 KB.');
     const data = JSON.parse(await file.text());
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('A preset must be a JSON object.');
     if (!Array.isArray(data.filters) || data.filters.length < 1 || data.filters.length > 10) throw new Error('The JSON must contain a filters array with 1 to 10 filters.');
     const filters = data.filters.map((f, i) => {
-      if (f?.type !== undefined && !['peak', 'PK'].includes(f.type)) throw new Error(`Filter ${i + 1}: only peak filters are supported.`);
-      if (!f || !Number.isFinite(f.frequency) || f.frequency < 20 || f.frequency > 20000 || !Number.isFinite(f.gain) || f.gain < -12 || f.gain > 12 || !Number.isFinite(f.q) || f.q < 0.1 || f.q > 20 || (f.enabled !== undefined && typeof f.enabled !== 'boolean')) throw new Error(`Filter ${i + 1} is invalid. Use 20–20000 Hz, −12 to +12 dB, and Q 0.1–20.`);
-      return {frequency: f.frequency, gain: f.gain, q: f.q, enabled: f.enabled !== false};
+      if (!f || typeof f !== 'object') throw new Error(`Filter ${i + 1} must be an object.`);
+      const type = f.type === undefined || f.type === 'PK' ? 'peak' : f.type;
+      if (typeof type !== 'string' || !Object.hasOwn(filterTypes, type)) throw new Error(`Filter ${i + 1}: unknown filter type.`);
+      const gain = f.gain === undefined && isPass(type) ? 0 : f.gain;
+      const q = f.q === undefined && (isShelf(type) || isPass(type)) ? shelfQ : f.q;
+      if (!Number.isFinite(f.frequency) || f.frequency < 20 || f.frequency > 20000 || !Number.isFinite(gain) || gain < -12 || gain > 12 || !Number.isFinite(q) || q < 0.1 || q > 20 || (f.enabled !== undefined && typeof f.enabled !== 'boolean')) throw new Error(`Filter ${i + 1} is invalid. Use 20–20000 Hz, −12 to +12 dB, and Q 0.1–20.`);
+      if (isPass(type) && gain !== 0) throw new Error(`Filter ${i + 1}: pass filters require gain 0.`);
+      if (isShelf(type) && Math.abs(q - shelfQ) > 0.00001) throw new Error(`Filter ${i + 1}: shelves use fixed slope S = 1. Omit Q or set it to 0.7071.`);
+      return {type, frequency: f.frequency, gain, q: isShelf(type) ? shelfQ : q, enabled: f.enabled !== false};
     });
-    const preamp = data.preamp ?? 'auto';
+    const preamp = data.preamp === undefined ? 'auto' : data.preamp;
     if (preamp !== 'auto' && (!Number.isFinite(preamp) || preamp > 0 || preamp < -60)) throw new Error('Preamp must be "auto" or a number between −60 and 0 dB.');
     state.filters = filters; $('preamp-mode').value = preamp === 'auto' ? 'auto' : 'manual'; $('preamp-value').value = preamp === 'auto' ? 0 : preamp;
     renderFilters(); changed(); showMessage('Filters imported. Compile a preview to check them.');

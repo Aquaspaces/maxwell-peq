@@ -35,7 +35,7 @@ App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0
 
 Validation completed: 23 unit/integration tests passed with the vendor DLL present; JavaScript syntax check passed. Browser checks at 1280 px and 390 px verified rendering without page overflow, four compiled curves, stale-preview invalidation after Q edits, and a successful read of active built-in preset 4 with Apply disabled. Recovery tests use mocked workers, including pre-send preset changes, timeouts, restoration without recompilation and offline-mode gating.
 
-Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. This build supports only peaks on direct USB original PS hardware; it makes no claim about shelves, pass filters, Xbox, Maxwell 2, Bluetooth or dongle transport.
+Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below; Xbox, Maxwell 2, Bluetooth and dongle transport remain untested.
 
 ## HID contention fix — 2026-10-12
 
@@ -50,3 +50,15 @@ Verification: all 25 tests passed. On the actual headset, a second read/write ha
 After the contention fix, Aqua reported that temporary EQ audibly worked on the original Maxwell PlayStation. Adjusting Q produced a clearly audible change. With a 1,000 Hz tone generator and a very narrow -12 dB peaking filter centered at 1,000 Hz, the tone was clearly quieter.
 
 This is user-reported end-to-end listening evidence for live peaking EQ and adjustable Q. It is not a calibrated measurement of exactly -12 dB or of the implemented bandwidth. A tone at the center demonstrates attenuation there; the reported change when varying Q provides separate evidence of bandwidth control. No custom firmware was required for these tests.
+
+## Shelf and pass filter support — 2026-10-12
+
+`set_xpf_point` at DLL VA `0x180001200` has ABI `(int context, int band, double frequency, double Q, int type)`. The generator's branches implement type 1 low-pass and type 2 high-pass. Offline calls at 1 kHz and Q sqrt(0.5) matched RBJ responses across all four rates within 0.00214 dB on the comparison grid. The application now calls this native function for pass filters; peak/pass-only sets retain the vendor generator.
+
+The numeric format has **24 significant bits**, shifted left eight bits in the 32-bit wire value. Stage fractional bits are 23/22/23/22/23; global scale uses 18. DLL code at `0x18000347C` through `0x180003604` corroborates the global scale's 2^18 conversion and floor(x+0.5) rounding. The prior 31/30/26 descriptions specify the wire decode, not 32-bit generation precision.
+
+Shelf-containing sets use `extended_filters.py`, with equations from the [W3C Audio EQ Cookbook](https://www.w3.org/TR/audio-eq-cookbook/). Shelves have fixed S=1. Each stage numerator is normalized by an analytical response bound and representable coefficient range; the first stage retains the vendor's 1.19 attenuation margin. The final scale compensates that normalization and applies preamp. Stage ordering/normalization are not byte-identical to the vendor's implementation. All generated banks are decoded and checked for stability, numerical accuracy and headroom before use.
+
+Pass-filter resonance is included in automatic headroom analytically: for Q > sqrt(0.5), peak magnitude is Q/sqrt(1-1/(4Q^2)). Comparisons include the corresponding digital resonance frequency, DC and Nyquist. Error comparisons for experimental sets floor both responses at -90 dB; this avoids meaningless relative-dB errors at deep stopband nulls while still rejecting leakage above that floor. The 0.15 dB threshold remains: for example a 30 Hz, -6 dB low shelf is rejected for approximately 0.237 dB error, whereas a 100 Hz, +6 dB shelf passes at approximately 0.0363 dB.
+
+Verification: 36 tests passed locally with the inspected DLL, including all new types, mixed cascades, shelf endpoint/midpoint properties, pass resonance, disabled filters, validation and a frozen SHA-256 check that the original peak preset remains byte-identical. Browser compilation returned four rate curves for all new filter types with appropriate gain/Q controls disabled. New filter types remain marked experimental; no new filter was sent to the headset during development.
