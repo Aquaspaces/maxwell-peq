@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Maxwell PEQ</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <div><h1>Maxwell PEQ</h1><p>Original Maxwell · PlayStation</p></div>
+      <span class="status-badge" id="connection">Connecting to local server</span>
+    </header>
+
+    <div class="intro"><strong>Parametric EQ proof of concept.</strong> Set the frequency, gain, and Q of each peak filter. Live audio response has not yet been verified.</div>
+
+    <section class="response-section" aria-labelledby="response-heading">
+      <div class="section-heading"><h2 id="response-heading">Frequency response</h2><span id="preview-state" class="muted">Compile to preview</span></div>
+      <div class="plot-wrap">
+        <svg id="response-plot" viewBox="0 0 1000 280" role="img" aria-label="Frequency response plot. Compile filters to show the calculated response."></svg>
+        <p id="plot-empty">Your compiled response will appear here.</p>
+      </div>
+      <div class="plot-footer"><span id="curve-legend">20 Hz–20 kHz · Logarithmic frequency</span><span id="compile-summary" class="muted">No coefficients compiled</span></div>
+    </section>
+
+    <section class="editor-section" aria-labelledby="filters-heading">
+      <div class="section-heading"><h2 id="filters-heading">Peak filters <span id="filter-count" class="count">1 / 10</span></h2><div class="button-group"><button type="button" class="quiet" id="import">Import JSON</button><button type="button" class="quiet" id="export">Export JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
+      <form id="editor">
+        <div class="table-wrap"><table><thead><tr><th scope="col">On</th><th scope="col">Filter</th><th scope="col">Frequency <span>Hz</span></th><th scope="col">Gain <span>dB</span></th><th scope="col">Q</th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead><tbody id="filter-rows"></tbody></table></div>
+        <button type="button" class="quiet add-filter" id="add">+ Add peak filter</button>
+        <div class="compile-bar">
+          <div class="preamp-controls"><label for="preamp-mode">Preamp</label><select id="preamp-mode"><option value="auto">Auto headroom</option><option value="manual">Manual</option></select><label class="manual-preamp" id="manual-preamp" hidden><span class="sr-only">Preamp in dB</span><input id="preamp-value" type="number" min="-60" max="0" step="any" value="0"><span>dB</span></label><span id="preamp-result" class="muted"></span></div>
+          <button type="submit" class="primary" id="compile">Compile preview</button>
+        </div>
+      </form>
+      <p class="editor-note">Higher Q makes a narrower filter. The compiler converts Q to bandwidth using frequency ÷ Q.</p>
+    </section>
+
+    <section class="device-section" aria-labelledby="device-heading">
+      <div class="device-copy"><h2 id="device-heading">Headset controls</h2><p id="device-state">Checking connection…</p><p>Temporary apply does not save a preset. Read and back up the current preset before applying.</p></div>
+      <div class="device-actions"><button type="button" id="read-device" disabled>Read &amp; back up preset</button><button type="button" id="apply" disabled>Apply temporarily</button><button type="button" class="quiet" id="restore" disabled>Restore backup</button></div>
+    </section>
+    <div id="message" role="status" aria-live="polite" hidden></div>
+    <details class="details"><summary>Compiled data &amp; device details</summary><pre id="details-content">Compile a preview or read the headset to inspect the result.</pre><button type="button" class="quiet" id="download-compiled" disabled>Download compiled JSON</button></details>
+    <footer>Runs locally. No firmware flashing.</footer>
+  </main>
+</body>
+</html>

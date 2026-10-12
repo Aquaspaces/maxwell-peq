@@ -1,0 +1,191 @@
+'use strict';
+const $ = (id) => document.getElementById(id);
+const state = {token: null, status: {}, busy: false, compiled: null, signature: null, filters: [{frequency: 1000, gain: -3, q: 1, enabled: true}]};
+const curveColors = ['#195fa5', '#ae5c26', '#337557', '#784a91'];
+
+function showMessage(text, error = false) {
+  $('message').textContent = text;
+  $('message').className = error ? 'error' : '';
+  $('message').hidden = false;
+}
+function download(name, data) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], {type: 'application/json'}));
+  const link = document.createElement('a'); link.href = url; link.download = name; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function payload() {
+  return {filters: state.filters.map(f => ({...f})), preamp: $('preamp-mode').value === 'auto' ? 'auto' : Number($('preamp-value').value)};
+}
+function isCurrent() { return state.compiled && state.signature === JSON.stringify(payload()); }
+function setBusy(busy) { state.busy = busy; updateControls(); }
+function updateControls() {
+  const current = isCurrent();
+  const deviceAllowed = !!state.status.live_enabled && !!state.token;
+  $('compile').disabled = state.busy || !state.token || !state.status.dll_available;
+  $('compile').textContent = state.busy ? 'Working…' : 'Compile preview';
+  $('add').disabled = state.busy || state.filters.length >= 10;
+  $('import').disabled = state.busy;
+  $('export').disabled = state.busy;
+  $('read-device').disabled = state.busy || !deviceAllowed || state.status.live_state !== 'unchanged';
+  $('apply').disabled = state.busy || !deviceAllowed || !state.status.dll_available || state.status.live_state === 'uncertain' || !state.status.backup_exists || !current;
+  $('restore').disabled = state.busy || !deviceAllowed || !state.status.backup_exists;
+  $('download-compiled').disabled = state.busy || !current;
+  $('preview-state').textContent = current ? 'Compiled preview · Not a measurement' : state.compiled ? 'Filters changed · Compile again' : 'Compile to preview';
+  $('response-plot').style.opacity = state.compiled && !current ? '.4' : '1';
+  $('filter-count').textContent = `${state.filters.length} / 10`;
+}
+function changed() {
+  $('preamp-result').textContent = '';
+  $('manual-preamp').hidden = $('preamp-mode').value !== 'manual';
+  $('preamp-value').required = $('preamp-mode').value === 'manual';
+  $('preamp-value').disabled = $('preamp-mode').value !== 'manual';
+  updateControls();
+}
+function renderFilters() {
+  $('filter-rows').replaceChildren();
+  state.filters.forEach((filter, index) => {
+    const row = document.createElement('tr');
+    row.className = filter.enabled ? '' : 'disabled-row';
+    const onCell = document.createElement('td');
+    const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = filter.enabled;
+    enabled.setAttribute('aria-label', `Enable filter ${index + 1}`);
+    enabled.addEventListener('change', () => { filter.enabled = enabled.checked; row.className = enabled.checked ? '' : 'disabled-row'; changed(); });
+    onCell.append(enabled); row.append(onCell);
+    const label = document.createElement('td'); label.className = 'filter-label'; label.textContent = String(index + 1).padStart(2, '0'); row.append(label);
+    for (const [key, title, min, max] of [['frequency', 'Frequency in Hz', 20, 20000], ['gain', 'Gain in dB', -12, 12], ['q', 'Q factor', 0.1, 20]]) {
+      const cell = document.createElement('td'); const input = document.createElement('input');
+      Object.assign(input, {type: 'number', value: filter[key], min: String(min), max: String(max), step: 'any', required: true});
+      input.setAttribute('aria-label', `${title}, filter ${index + 1}`);
+      input.addEventListener('input', () => { filter[key] = input.value === '' ? null : Number(input.value); changed(); });
+      cell.append(input); row.append(cell);
+    }
+    const removeCell = document.createElement('td'); const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'quiet remove'; remove.setAttribute('aria-label', `Remove filter ${index + 1}`);
+    remove.disabled = state.filters.length === 1;
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 6 12 12M6 18 18 6"/></svg>';
+    remove.addEventListener('click', () => { state.filters.splice(index, 1); renderFilters(); changed(); });
+    removeCell.append(remove); row.append(removeCell); $('filter-rows').append(row);
+  });
+  updateControls();
+}
+async function api(path, body) {
+  const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : {'Content-Type': 'application/json', 'X-Session-Token': state.token || ''}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+  let result;
+  try { result = await response.json(); } catch { throw new Error(`Local server returned an unreadable response (${response.status}).`); }
+  if (!response.ok || result.error) throw new Error(result.error || `Request failed (${response.status}).`);
+  return result;
+}
+async function refreshStatus() {
+  const result = await api('/api/status');
+  state.status = result; state.token = result.token;
+  const live = result.live_enabled && result.dll_available;
+  $('connection').textContent = live ? 'Device access enabled' : 'Offline editor';
+  $('connection').classList.toggle('ready', !!live);
+  const device = typeof result.device === 'string' ? result.device : result.device?.name;
+  $('device-state').textContent = !result.live_enabled
+    ? 'Device access is disabled. You can edit filters and compile a preview offline.'
+    : result.live_state === 'uncertain' ? 'The last write was not confirmed. Restore the backup before applying again.'
+    : result.live_state === 'applied' ? 'Temporary EQ is active. Restore the backup before reading another preset.'
+    : !result.dll_available ? 'The Audeze coefficient library is unavailable. Compilation is disabled; reading and restoring remain available.'
+    : `${device ? device + '. ' : 'Device access is enabled. '}${result.backup_exists ? 'A preset backup is available.' : 'Choose a custom preset in Audeze HQ, then read it to create a backup.'}`;
+  updateControls();
+}
+function svgElement(name, attrs, text) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+  Object.entries(attrs).forEach(([key, val]) => node.setAttribute(key, String(val)));
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function plot(curves = []) {
+  const svg = $('response-plot'); svg.replaceChildren();
+  const width = Math.max(270, svg.clientWidth), height = width < 600 ? 220 : 280;
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const left = 40, right = width - 23, top = 20, bottom = height - 36;
+  const points = curves.flatMap(c => c.points || []).filter(p => Number.isFinite(p[1]));
+  const values = points.map(p => p[1]);
+  const yMin = Math.min(-12, Math.floor(Math.min(0, ...values) / 6) * 6);
+  const yMax = Math.max(6, Math.ceil(Math.max(0, ...values) / 6) * 6);
+  const x = f => left + Math.log10(f / 20) / 3 * (right - left);
+  const y = db => top + (yMax - db) / (yMax - yMin) * (bottom - top);
+  for (let db = yMin; db <= yMax; db += yMax - yMin > 60 ? 12 : 6) {
+    svg.append(svgElement('line', {x1: left, x2: right, y1: y(db), y2: y(db), stroke: db === 0 ? '#a5b7c3' : '#e5ebef', 'stroke-width': 1}));
+    svg.append(svgElement('text', {x: left - 12, y: y(db) + 4, 'text-anchor': 'end'}, `${db > 0 ? '+' : ''}${db}`));
+  }
+  for (const f of (width < 600 ? [20, 100, 1000, 10000, 20000] : [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000])) {
+    svg.append(svgElement('line', {x1: x(f), x2: x(f), y1: top, y2: bottom, stroke: '#edf0f2', 'stroke-width': 1}));
+    svg.append(svgElement('text', {x: x(f), y: height - 14, 'text-anchor': 'middle'}, f >= 1000 ? `${f / 1000}k` : f));
+  }
+  const defs = svgElement('defs', {}), clip = svgElement('clipPath', {id: 'plot-clip'});
+  clip.append(svgElement('rect', {x: left, y: top, width: right - left, height: bottom - top})); defs.append(clip); svg.append(defs);
+  curves.forEach((curve, index) => {
+    const valid = (curve.points || []).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= 20 && p[0] <= 20000);
+    const d = valid.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(2)},${y(p[1]).toFixed(2)}`).join(' ');
+    svg.append(svgElement('path', {d, fill: 'none', stroke: curveColors[index % curveColors.length], 'stroke-width': 2.2, 'stroke-linejoin': 'round', 'clip-path': 'url(#plot-clip)', ...(index ? {'stroke-dasharray': '7 4'} : {})}));
+  });
+  $('plot-empty').hidden = curves.length > 0;
+  svg.setAttribute('aria-label', curves.length ? `Calculated frequency response of ${curves.length} sample-rate banks, including preamp. Not measured on the headset.` : 'Frequency response plot. Compile filters to show the calculated response.');
+  $('curve-legend').replaceChildren();
+  curves.forEach((curve, index) => {
+    const item = document.createElement('span'); item.className = 'legend-item';
+    const line = document.createElement('span'); line.className = 'legend-line'; line.style.background = curveColors[index % curveColors.length];
+    item.append(line, document.createTextNode(`${Number(curve.rate) / 1000} kHz`)); $('curve-legend').append(item);
+  });
+  if (!curves.length) $('curve-legend').textContent = '20 Hz–20 kHz · Logarithmic frequency';
+}
+async function action(work) {
+  setBusy(true); $('message').hidden = true;
+  try { await work(); } catch (error) { showMessage(error.message, true); await refreshStatus().catch(() => {}); }
+  finally { setBusy(false); }
+}
+$('editor').addEventListener('submit', event => {
+  event.preventDefault();
+  action(async () => {
+    const input = payload(); const result = await api('/api/compile', input);
+    state.compiled = result; state.signature = JSON.stringify(input);
+    plot(result.curves || []);
+    $('preamp-result').textContent = `${Number(result.preamp).toFixed(2)} dB`;
+    $('compile-summary').textContent = Number.isFinite(result.max_error_db) ? `Fit error ≤ ${result.max_error_db.toFixed(3)} dB` : 'Coefficients compiled';
+    $('details-content').textContent = JSON.stringify(result, null, 2);
+    showMessage('Preview compiled. Nothing has been sent to the headset.');
+  });
+});
+$('add').addEventListener('click', () => { if (state.filters.length < 10) { state.filters.push({frequency: 1000, gain: 0, q: 1, enabled: true}); renderFilters(); changed(); } });
+$('preamp-mode').addEventListener('change', changed);
+$('preamp-value').addEventListener('input', changed);
+$('export').addEventListener('click', () => { if ($('editor').reportValidity()) download('maxwell-peq.json', payload()); });
+$('import').addEventListener('click', () => $('import-file').click());
+$('import-file').addEventListener('change', async event => {
+  const file = event.target.files[0]; if (!file) return;
+  try {
+    if (file.size > 100000) throw new Error('This file is too large. Import a filter JSON file under 100 KB.');
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.filters) || data.filters.length < 1 || data.filters.length > 10) throw new Error('The JSON must contain a filters array with 1 to 10 filters.');
+    const filters = data.filters.map((f, i) => {
+      if (f?.type !== undefined && !['peak', 'PK'].includes(f.type)) throw new Error(`Filter ${i + 1}: only peak filters are supported.`);
+      if (!f || !Number.isFinite(f.frequency) || f.frequency < 20 || f.frequency > 20000 || !Number.isFinite(f.gain) || f.gain < -12 || f.gain > 12 || !Number.isFinite(f.q) || f.q < 0.1 || f.q > 20 || (f.enabled !== undefined && typeof f.enabled !== 'boolean')) throw new Error(`Filter ${i + 1} is invalid. Use 20–20000 Hz, −12 to +12 dB, and Q 0.1–20.`);
+      return {frequency: f.frequency, gain: f.gain, q: f.q, enabled: f.enabled !== false};
+    });
+    const preamp = data.preamp ?? 'auto';
+    if (preamp !== 'auto' && (!Number.isFinite(preamp) || preamp > 0 || preamp < -60)) throw new Error('Preamp must be "auto" or a number between −60 and 0 dB.');
+    state.filters = filters; $('preamp-mode').value = preamp === 'auto' ? 'auto' : 'manual'; $('preamp-value').value = preamp === 'auto' ? 0 : preamp;
+    renderFilters(); changed(); showMessage('Filters imported. Compile a preview to check them.');
+  } catch (error) { showMessage(error.message, true); }
+  event.target.value = '';
+});
+$('download-compiled').addEventListener('click', () => { if (isCurrent()) download('maxwell-peq-compiled.json', state.compiled); });
+for (const [id, endpoint, message] of [
+  ['read-device', '/api/read_device', 'Current preset read and backed up.'],
+  ['apply', '/api/apply', 'Temporary EQ sent. Listen at low volume to check the result.'],
+  ['restore', '/api/restore', 'Backup sent to the headset.']
+]) {
+  $(id).addEventListener('click', () => action(async () => {
+    if (id === 'apply' && (!$('editor').reportValidity() || !isCurrent())) throw new Error('Compile the current filters before applying.');
+    const result = await api(endpoint, id === 'apply' ? payload() : {});
+    $('details-content').textContent = JSON.stringify(result, null, 2);
+    showMessage(result.message || (id === 'read-device' && result.backup_exists === false ? 'Preset read. Choose a custom preset in Audeze HQ, then read again to create a backup.' : message));
+    await refreshStatus();
+  }));
+}
+renderFilters(); plot();
+new ResizeObserver(() => plot(state.compiled?.curves || [])).observe($('response-plot').parentElement);
+refreshStatus().catch(error => { $('connection').textContent = 'Local server unavailable'; $('device-state').textContent = 'Start the local server and reload this page.'; showMessage(error.message, true); updateControls(); });
