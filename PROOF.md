@@ -35,7 +35,7 @@ App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0
 
 Validation completed: 23 unit/integration tests passed with the vendor DLL present; JavaScript syntax check passed. Browser checks at 1280 px and 390 px verified rendering without page overflow, four compiled curves, stale-preview invalidation after Q edits, and a successful read of active built-in preset 4 with Apply disabled. Recovery tests use mocked workers, including pre-send preset changes, timeouts, restoration without recompilation and offline-mode gating.
 
-Actual live command acceptance on this headset, audible or measured response, behavior across reconnects/preset switches, and other firmware revisions. Read success and exact saved-byte reproduction establish format compatibility, not end-to-end audio correctness. This build supports only peaks on direct USB original PS hardware; it makes no claim about shelves, pass filters, Xbox, Maxwell 2, Bluetooth or dongle transport.
+Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. This build supports only peaks on direct USB original PS hardware; it makes no claim about shelves, pass filters, Xbox, Maxwell 2, Bluetooth or dongle transport.
 
 ## HID contention fix — 2026-10-12
 
@@ -44,3 +44,9 @@ A user Apply attempt failed with `RACE stream lost its packet boundary`. The ser
 After the user fully quit HQ, five consecutive full snapshots passed. The control handle now opens with sharing mode zero for the complete transaction; a sharing violation explicitly asks the user to quit HQ rather than permitting interleaved access. This follows [Windows CreateFile sharing semantics](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea). Enumeration still uses metadata-only probes. No persistent write or live EQ was sent during this investigation.
 
 Verification: all 25 tests passed. On the actual headset, a second read/write handle was rejected with Windows error 32 while the exclusive handle was open, and reopening after closing the first handle succeeded. The existing server loads the updated transport in each worker, so its in-memory backup was retained without a restart.
+
+## User listening confirmation — 2026-10-12
+
+After the contention fix, Aqua reported that temporary EQ audibly worked on the original Maxwell PlayStation. Adjusting Q produced a clearly audible change. With a 1,000 Hz tone generator and a very narrow -12 dB peaking filter centered at 1,000 Hz, the tone was clearly quieter.
+
+This is user-reported end-to-end listening evidence for live peaking EQ and adjustable Q. It is not a calibrated measurement of exactly -12 dB or of the implemented bandwidth. A tone at the center demonstrates attenuation there; the reported change when varying Q provides separate evidence of bandwidth control. No custom firmware was required for these tests.

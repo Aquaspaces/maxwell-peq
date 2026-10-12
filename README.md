@@ -2,7 +2,7 @@
 
 Local Windows editor for up to ten peaking filters on the **original Maxwell PlayStation**, connected directly by USB-C. Each filter has an arbitrary frequency, gain and Q. Includes calculated response plots, automatic preamp headroom, JSON import/export, temporary apply, and restoration from exact saved coefficient bytes.
 
-The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. Live apply and acoustic response have not yet been tested. See [PROOF.md](PROOF.md) for the evidence and limits.
+The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. Exact acoustic response has not been measured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
 ## Start
 
