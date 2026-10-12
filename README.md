@@ -32,7 +32,23 @@ After reading a backup and compiling, click **Save to headset**. This overwrites
 
 HQ's ten slider records are left unchanged because they cannot describe these custom filters. Its sliders will show old values, and editing them can replace the saved EQ. Keep filter JSON exports for editable profiles; the raw backup preserves the exact original sound but cannot reconstruct arbitrary filter settings.
 
-The server journals each write before sending it and recovers the session, connection and original backup after restart. If a write times out, further Apply/Save operations are blocked until restoration. Saved-profile recovery permits replacing an uncertain stored blob, while still checking the interface, custom slot and UI records. To change connections or take a new backup, first restore the existing session. All backups and write records stay under ignored `backups/`; keep that directory for recovery.
+The server journals each write before sending it and recovers the session, connection and original backup after restart. If a write times out, further Apply/Save operations are blocked until restoration. Saved-profile recovery permits replacing an uncertain stored blob, while still checking the interface, custom slot and UI records. Taking a new backup requires restoring the existing session. All backups and write records stay under ignored `backups/`; keep that directory for recovery.
+
+## Local profiles and editor recovery
+
+Use **Save as new** to name the current filters, **Load** to open a profile, **Update** to replace its saved settings, or **Rename** / **Delete** to manage it. These actions only affect files on the computer. Apply and Save to headset remain separate. Loading discards the current editor contents, so save a new profile or update the current one first if you want to keep those edits.
+
+The local library lives in ignored `profiles/library.json`. Names are labels, not filenames. Saving does not require the vendor DLL or a connected headset; compilation is still required before applying. Stale edits from another browser tab cannot overwrite a newer saved profile without reloading it. JSON import/export remains available for transferring individual profiles.
+
+The browser keeps the current editor draft, including unsaved filter edits and the selected profile, across reloads. With no browser draft, the editor reopens the last filters applied through this server. Neither recovery path automatically sends EQ. Drafts belong to the browser and local server address; use named profiles or exports to keep settings across browsers or computers. Clearing browser storage removes drafts but leaves the file-based library intact.
+
+## Change USB / dongle connections
+
+Choose a connection and click **Connect / verify**. With an existing backup, this reads the selected interface and compares the current custom slot, slider records and exact saved coefficient bytes with the session's expected state. If they match, the server updates the control interface while retaining the original backup and live/saved state. No restore, save or live EQ is sent. The same action can rebind a connection after Windows changes its HID path.
+
+If the preset differs or the connection is unavailable, the existing session remains intact. An uncertain persistent write must be recovered through its original connection first. This comparison establishes matching preset contents, not a unique physical headset serial number. Only the original PS model and its PS dongle are supported.
+
+See [API.md](API.md) for the profile and connection endpoints used by the interface.
 
 Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, exact 844-byte readback after powering the headset off/on with USB unplugged, and user-reported audible EQ retention during wireless playback. See [PROOF.md](PROOF.md). [examples/obvious-persistence.json](examples/obvious-persistence.json) contains the deliberately exaggerated two-cut test profile.
 

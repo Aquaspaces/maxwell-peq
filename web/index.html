@@ -28,6 +28,15 @@
     </section>
 
     <section class="editor-section" aria-labelledby="filters-heading">
+      <div class="profile-controls" aria-label="Profiles on this computer">
+        <label for="profile-list">Local profiles</label><select id="profile-list"><option value="">Choose a profile</option></select>
+        <button type="button" id="profile-load">Load</button>
+        <label for="profile-name">Name</label><input id="profile-name" type="text" maxlength="80" placeholder="Profile name">
+        <button type="button" id="profile-create">Save as new</button><button type="button" id="profile-update">Update</button>
+        <button type="button" class="quiet" id="profile-rename">Rename</button><button type="button" class="quiet" id="profile-delete">Delete</button>
+      </div>
+      <p id="profile-state" class="editor-note" role="status">Profiles stay on this computer. Loading a profile changes only the editor.</p>
+      <p id="draft-state" class="editor-note" role="status"></p>
       <div class="section-heading"><h2 id="filters-heading">Filters <span id="filter-count" class="count">1 / 10</span></h2><div class="button-group"><button type="button" class="quiet" id="import">Import JSON</button><button type="button" class="quiet" id="export">Export JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
       <form id="editor">
         <div class="table-wrap"><table><thead><tr><th scope="col">On</th><th scope="col">Filter</th><th scope="col">Type</th><th scope="col">Frequency <span>Hz</span></th><th scope="col">Gain <span>dB</span></th><th scope="col">Q</th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead><tbody id="filter-rows"></tbody></table></div>
@@ -44,10 +53,10 @@
       <div class="device-copy">
         <h2 id="device-heading">Headset controls</h2>
         <p id="device-state">Checking connection…</p>
-        <div class="transport-control"><label for="transport">Connection</label><select id="transport" disabled><option value="usb">USB cable</option><option value="dongle">Wireless dongle</option></select></div>
+        <div class="transport-control"><label for="transport">Connection</label><select id="transport" disabled><option value="usb">USB cable</option><option value="dongle">Wireless dongle</option></select><button type="button" id="connect" disabled>Connect / verify</button></div>
         <p>Select a custom preset in Audeze HQ, then fully quit HQ, including its tray icon. For the dongle, keep the headset powered on and paired. Read and back up the preset before applying EQ.</p>
         <p id="save-help">Save to headset overwrites the active custom preset and keeps your original backup. Audeze HQ’s sliders will not represent these filters; editing them in HQ can replace your EQ.</p>
-        <p id="session-recovery" hidden>The previous session and its original backup were recovered. Your editor filters have not been changed.</p>
+        <p id="session-recovery" hidden>The previous device session and its original backup were recovered. Editor filters are separate from the headset's current EQ.</p>
       </div>
       <div class="device-actions">
         <button type="button" id="read-device" disabled>Read &amp; back up preset</button>

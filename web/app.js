@@ -35,7 +35,8 @@ function updateControls() {
   $('add').disabled = state.busy || state.filters.length >= 10;
   $('import').disabled = state.busy;
   $('export').disabled = state.busy;
-  $('transport').disabled = state.busy || !deviceAllowed || !untouched;
+  $('transport').disabled = state.busy || !deviceAllowed || storage === 'uncertain';
+  $('connect').disabled = state.busy || !deviceAllowed || storage === 'uncertain';
   $('read-device').disabled = state.busy || !deviceAllowed || !untouched;
   $('apply').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
   $('save').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
@@ -45,13 +46,16 @@ function updateControls() {
   $('preview-state').textContent = current ? 'Compiled preview · Not a measurement' : state.compiled ? 'Filters changed · Compile again' : 'Compile to preview';
   $('response-plot').style.opacity = state.compiled && !current ? '.4' : '1';
   $('filter-count').textContent = `${state.filters.length} / 10`;
+  updateProfileControls();
 }
 function changed() {
+  state.editorEdited = true;
   $('preamp-result').textContent = '';
   $('manual-preamp').hidden = $('preamp-mode').value !== 'manual';
   $('preamp-value').required = $('preamp-mode').value === 'manual';
   $('preamp-value').disabled = $('preamp-mode').value !== 'manual';
   updateControls();
+  saveDraft();
 }
 function renderFilters() {
   $('filter-rows').replaceChildren();
@@ -115,7 +119,7 @@ async function refreshStatus() {
   const result = await api('/api/status');
   state.status = result; state.token = result.token;
   const storage = result.storage_state || 'unchanged';
-  if (!state.transportDirty || result.live_state !== 'unchanged' || storage !== 'unchanged') {
+  if (!state.transportDirty) {
     $('transport').value = result.transport || 'usb';
     state.transportDirty = false;
   }
@@ -231,9 +235,10 @@ $('download-compiled').addEventListener('click', () => { if (isCurrent()) downlo
 $('transport').addEventListener('change', () => {
   state.transportDirty = true;
   updateControls();
-  showMessage('Read and back up the preset through this connection before applying or saving EQ.');
+  showMessage('Click Connect / verify to check this connection and retain your original backup.');
 });
 for (const [id, endpoint, message] of [
+  ['connect', '/api/connect', 'Connection verified. Original backup retained.'],
   ['read-device', '/api/read_device', 'Current preset read and backed up.'],
   ['apply', '/api/apply', 'Temporary EQ sent. Listen at low volume to check the result.'],
   ['save', '/api/save', 'Custom EQ saved, verified, and applied. The original backup is retained.'],
@@ -243,13 +248,141 @@ for (const [id, endpoint, message] of [
   $(id).addEventListener('click', () => action(async () => {
     const sendsFilters = id === 'apply' || id === 'save';
     if (sendsFilters && (!$('editor').reportValidity() || !isCurrent())) throw new Error('Compile the current filters before applying or saving.');
-    const result = await api(endpoint, sendsFilters ? payload() : id === 'read-device' ? {transport: $('transport').value} : {});
-    if (id === 'read-device') state.transportDirty = false;
+    const result = await api(endpoint, sendsFilters ? payload() : (id === 'read-device' || id === 'connect') ? {transport: $('transport').value} : {});
+    if (id === 'read-device' || id === 'connect') state.transportDirty = false;
     $('details-content').textContent = JSON.stringify(result, null, 2);
     showMessage(result.message || (id === 'read-device' && result.backup_exists === false ? 'Preset read. Choose a custom preset in Audeze HQ, then read again to create a backup.' : message));
     await refreshStatus();
   }));
 }
+const draftKey = 'maxwell-peq-editor-v1';
+state.profiles = [];
+state.loadedProfile = null;
+state.libraryReady = false;
+state.draftReady = false;
+
+function updateProfileControls() {
+  const selected = state.profiles?.find(p => p.id === $('profile-list').value);
+  const loaded = state.loadedProfile;
+  const available = !state.busy && !!state.token && state.libraryReady;
+  $('profile-list').disabled = !available;
+  $('profile-name').disabled = state.busy;
+  $('profile-load').disabled = !available || !selected;
+  $('profile-create').disabled = !available || !$('profile-name').value.trim();
+  for (const id of ['profile-update', 'profile-rename', 'profile-delete']) {
+    $(id).disabled = !available || !loaded || loaded.id !== selected?.id;
+  }
+  const modified = loaded && (JSON.stringify(payload()) !== JSON.stringify(loaded.preset) || $('profile-name').value.trim() !== loaded.name);
+  $('profile-state').textContent = loaded
+    ? `${loaded.name}${modified ? ' · Unsaved changes' : ' · Saved locally'}. Loading and saving local profiles does not change headset EQ.`
+    : 'Profiles stay on this computer. Loading a profile changes only the editor.';
+}
+
+function saveDraft() {
+  if (!state.draftReady) return;
+  try {
+    localStorage.setItem(draftKey, JSON.stringify({version: 1, filters: state.filters,
+      preampMode: $('preamp-mode').value, preampValue: $('preamp-value').value,
+      name: $('profile-name').value, loaded: state.loadedProfile}));
+    $('draft-state').textContent = 'Editor draft saved in this browser.';
+  } catch {
+    $('draft-state').textContent = 'Browser draft storage is unavailable. Save a local profile or export JSON to keep your edits.';
+  }
+}
+
+function restoreDraft() {
+  try {
+    const text = localStorage.getItem(draftKey);
+    if (!text) return false;
+    if (text.length > 65536) throw new Error('Draft too large');
+    const draft = JSON.parse(text);
+    const validNumber = x => x === null || (typeof x === 'number' && Number.isFinite(x));
+    if (draft.version !== 1 || !Array.isArray(draft.filters) || !draft.filters.length || draft.filters.length > 10
+        || !draft.filters.every(f => f && Object.hasOwn(filterTypes, f.type) && typeof f.enabled === 'boolean'
+          && ['frequency', 'gain', 'q'].every(k => validNumber(f[k])))
+        || !['auto', 'manual'].includes(draft.preampMode) || typeof draft.preampValue !== 'string'
+        || typeof draft.name !== 'string'
+        || (draft.loaded && (typeof draft.loaded.id !== 'string' || !Number.isInteger(draft.loaded.revision)
+          || typeof draft.loaded.name !== 'string' || !draft.loaded.preset))) throw new Error('Invalid draft');
+    state.filters = draft.filters;
+    state.loadedProfile = draft.loaded || null;
+    $('preamp-mode').value = draft.preampMode;
+    $('preamp-value').value = draft.preampValue;
+    $('profile-name').value = draft.name;
+    $('draft-state').textContent = 'Previous editor draft restored. Nothing was sent to the headset.';
+    return true;
+  } catch {
+    $('draft-state').textContent = 'The browser draft could not be restored. Load a local profile or import JSON.';
+    return false;
+  }
+}
+
+function populateProfiles(profiles) {
+  const selection = $('profile-list').value || state.loadedProfile?.id;
+  state.profiles = profiles;
+  $('profile-list').replaceChildren(new Option('Choose a profile', ''));
+  for (const profile of profiles) $('profile-list').add(new Option(profile.name, profile.id));
+  if (profiles.some(p => p.id === selection)) $('profile-list').value = selection;
+  state.libraryReady = true;
+  updateProfileControls();
+}
+
+function loadEditor(preset, profile = null) {
+  state.filters = preset.filters.map(f => ({...f, type: f.type || 'peak', enabled: f.enabled !== false,
+    q: f.q ?? shelfQ, gain: f.gain ?? 0}));
+  $('preamp-mode').value = preset.preamp === 'auto' || preset.preamp === undefined ? 'auto' : 'manual';
+  $('preamp-value').value = typeof preset.preamp === 'number' ? preset.preamp : 0;
+  state.loadedProfile = profile ? structuredClone(profile) : null;
+  $('profile-name').value = profile?.name || '';
+  state.compiled = null; state.signature = null;
+  renderFilters(); changed(); plot();
+  $('compile-summary').textContent = 'No coefficients compiled';
+}
+
+$('profile-name').addEventListener('input', () => { updateProfileControls(); saveDraft(); });
+$('profile-list').addEventListener('change', updateProfileControls);
+$('profile-load').addEventListener('click', () => action(async () => {
+  const selected = $('profile-list').value;
+  populateProfiles((await api('/api/profiles')).profiles);
+  const profile = state.profiles.find(p => p.id === selected);
+  if (!profile) throw new Error('This profile no longer exists. Choose another profile.');
+  loadEditor(profile.preset, profile);
+  showMessage(`Loaded ${profile.name} into the editor. Compile before applying.`);
+}));
+for (const [id, operation] of [['profile-create', 'save'], ['profile-update', 'save'], ['profile-rename', 'rename'], ['profile-delete', 'delete']]) {
+  $(id).addEventListener('click', () => action(async () => {
+    if (operation === 'save' && !$('editor').reportValidity()) return;
+    const loaded = state.loadedProfile;
+    if (operation === 'delete' && !confirm(`Delete local profile "${loaded.name}"? Your editor draft and headset EQ will remain.`)) return;
+    const request = {name: $('profile-name').value, ...(operation === 'save' ? {preset: payload()} : {}),
+      ...(id !== 'profile-create' ? {id: loaded.id, revision: loaded.revision} : {})};
+    let result;
+    try { result = await api(`/api/profiles/${operation}`, request); }
+    catch (error) {
+      // Refresh the choices, retaining the loaded revision and unsaved edits.
+      populateProfiles((await api('/api/profiles')).profiles);
+      throw error;
+    }
+    state.loadedProfile = result.profile;
+    populateProfiles(result.profiles);
+    $('profile-list').value = result.profile?.id || '';
+    if (result.profile) $('profile-name').value = result.profile.name;
+    saveDraft();
+    showMessage(operation === 'delete' ? 'Local profile deleted. Editor filters and headset EQ are unchanged.' : 'Profile saved on this computer. No EQ was sent.');
+  }));
+}
+
+const restoredDraft = restoreDraft();
 renderFilters(); plot();
+$('manual-preamp').hidden = $('preamp-mode').value !== 'manual';
+$('preamp-value').disabled = $('preamp-mode').value !== 'manual';
+$('preamp-value').required = $('preamp-mode').value === 'manual';
+state.draftReady = true;
 new ResizeObserver(() => plot(state.compiled?.curves || [])).observe($('response-plot').parentElement);
-refreshStatus().catch(error => { $('connection').textContent = 'Local server unavailable'; $('device-state').textContent = 'Start the local server and reload this page.'; showMessage(error.message, true); updateControls(); });
+refreshStatus().then(async () => {
+  if (!restoredDraft && !state.editorEdited && state.status.last_profile) {
+    loadEditor(state.status.last_profile);
+    $('draft-state').textContent = 'Last applied filters reopened. Nothing was sent to the headset.';
+  }
+  populateProfiles((await api('/api/profiles')).profiles);
+}).catch(error => { showMessage(error.message, true); updateControls(); });

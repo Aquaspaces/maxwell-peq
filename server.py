@@ -14,6 +14,7 @@ import sys
 import threading
 
 import peq
+from profiles import ProfileStore
 
 ROOT = Path(__file__).resolve().parent
 
@@ -41,7 +42,7 @@ def worker(script, request, timeout=15):
 
 
 class App:
-    def __init__(self, enable_live=False, session_path=None):
+    def __init__(self, enable_live=False, session_path=None, profiles_path=None):
         self.enable_live = enable_live
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
@@ -58,6 +59,13 @@ class App:
         self.session_path = Path(session_path) if session_path is not None else None
         if self.session_path and self.session_path.exists():
             self._recover()
+        self.profiles_error = None
+        try:
+            self.profiles = ProfileStore(profiles_path, self._atomic_json)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            # A damaged local library must not prevent device-backup restoration.
+            self.profiles = None
+            self.profiles_error = f'Cannot load the profile library: {error}. Preserve the library file before repairing it.'
 
     @staticmethod
     def _atomic_json(path, value):
@@ -131,15 +139,44 @@ class App:
                     transports=['usb', 'dongle'], session_recovered=self.session_recovered,
                     pending_operation=self.pending.get('operation') if self.pending else None,
                     last_profile=self.last_profile,
+                    profiles_error=self.profiles_error,
                     backup_path=self.backup_path, hardware_audio_verified=False)
 
     def perform(self, path, request):
+        if path.startswith('/api/profiles/'):
+            if self.profiles is None:
+                raise ValueError(self.profiles_error)
+            return self.profiles.change(path.removeprefix('/api/profiles/'), request)
         if path == '/api/compile':
             return worker('peq.py', request)
-        if path not in ('/api/read_device', '/api/apply', '/api/restore', '/api/save', '/api/restore_saved'):
+        if path not in ('/api/connect', '/api/read_device', '/api/apply', '/api/restore', '/api/save', '/api/restore_saved'):
             raise ValueError('Unknown endpoint.')
         if not self.enable_live:
             raise ValueError('Device controls are disabled. Restart with --enable-live for a deliberate headset test.')
+        if path == '/api/connect':
+            if self.backup is None:
+                return self.perform('/api/read_device', request)
+            transport = request.get('transport', self.transport)
+            if transport not in ('usb', 'dongle'):
+                raise ValueError('Choose USB-C or dongle.')
+            if self.storage_state == 'uncertain':
+                raise ValueError('Restore the uncertain saved profile through its current connection before switching.')
+            state = worker('device_worker.py', dict(operation='read', transport=transport))
+            expected = self.expected or self.backup['state']
+            if any(state.get(key) != expected.get(key) for key in
+                   ('index', 'slot', 'raw_ui_hex', 'saved_coefficients_hex')):
+                raise ValueError('This connection has a different preset or stored EQ. Your existing connection and original backup are unchanged.')
+            previous = (self.transport, self.device, self.expected)
+            self.transport = transport
+            self.device = f"Original Maxwell PS · {'USB-C' if transport == 'usb' else 'dongle'} · preset {state['index']}"
+            self.expected = copy.deepcopy(state)
+            try:
+                self._persist()
+            except Exception:
+                self.transport, self.device, self.expected = previous
+                raise
+            return dict(state=state, backup_exists=True, backup_path=self.backup_path,
+                        message='Connection verified. Your original backup is retained. No EQ was sent.')
         if path == '/api/read_device':
             if self.live_state != 'unchanged' or self.storage_state != 'unchanged':
                 raise ValueError('Restore the existing backup before reading a new one.')
@@ -281,6 +318,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/status':
             with self.server.app.lock:
                 return self.json(200, self.server.app.status())
+        if self.path == '/api/profiles':
+            with self.server.app.lock:
+                if self.server.app.profiles is None:
+                    return self.json(400, dict(error=self.server.app.profiles_error))
+                return self.json(200, dict(profiles=self.server.app.profiles.list()))
         files = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
                  '/app.js': ('app.js', 'text/javascript; charset=utf-8')}
         if self.path not in files:
@@ -317,7 +359,7 @@ def main():
     parser.add_argument('--enable-live', action='store_true')
     args = parser.parse_args()
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
-    server.app = App(args.enable_live, ROOT / 'backups' / 'session.json')
+    server.app = App(args.enable_live, ROOT / 'backups' / 'session.json', ROOT / 'profiles' / 'library.json')
     print(f'Editor: http://127.0.0.1:{server.server_port} | Device controls: {args.enable_live}', flush=True)
     try:
         server.serve_forever()
