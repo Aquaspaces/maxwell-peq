@@ -35,7 +35,7 @@ App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0
 
 Validation completed: 23 unit/integration tests passed with the vendor DLL present; JavaScript syntax check passed. Browser checks at 1280 px and 390 px verified rendering without page overflow, four compiled curves, stale-preview invalidation after Q edits, and a successful read of active built-in preset 4 with Apply disabled. Recovery tests use mocked workers, including pre-send preset changes, timeouts, restoration without recompilation and offline-mode gating.
 
-Exact measured response, behavior across reconnects/preset switches, and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below; Xbox, Maxwell 2 and Bluetooth remain untested. Dongle testing is recorded below.
+Response outside 200 Hz–5 kHz and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below and a measured midband response; Xbox and Maxwell 2 remain untested. Dongle testing, Bluetooth playback and preset switching, and a midband response measurement are recorded below.
 
 ## HID contention fix — 2026-10-12
 
@@ -85,3 +85,33 @@ Validation: 57 automated tests pass, including packet/key restrictions, capacity
 
 
 The first post-reboot snapshot hit a packet-boundary error before any EQ write. A traced fresh read succeeded and showed leftover coefficient fragments and restart notifications. The transport now requires six consecutive empty polls (at least 50 ms) before sending a command, instead of trusting the first empty poll. Input that never settles aborts after 100 polls. Tests cover delayed fragments restarting that interval, malformed input, and the bounded abort. Three consecutive wireless snapshots with the updated drain matched the saved profile. This improves handling of delayed input; it does not claim to eliminate every possible transport failure.
+
+## Bluetooth playback and preset switching — 2026-10-12
+
+Aqua reported two listening checks on the original PS headset:
+
+- **Bluetooth.** The saved EQ worked fully in Bluetooth playback. The editor has no Bluetooth transport; this confirms the headset applies its stored coefficients to the Bluetooth audio path, not that the app can connect over Bluetooth.
+- **Preset switching.** In Audeze HQ, switching from preset 4 to a different preset played that preset unchanged from stock. Switching back to preset 4 brought back a custom EQ.
+
+A read-only dongle snapshot afterwards (2026-10-13 02:08 UTC) contradicts the second result being the editor's EQ. Custom 4 held SHA-256 `60dad9fc…`, the original HQ-generated coefficients from the first backup, not the editor's last save (a 7,450 Hz high-pass, `e1992015…`). Neither the editor's session nor its audit records contain a write of `60dad9fc…` after that save. The likely cause is that Audeze HQ regenerates the slot's coefficients from its own slider records, which the editor leaves unchanged, when the preset is reselected. If so, the custom EQ heard after switching back was HQ's slider EQ. This is unconfirmed: it needs a save, a switch in HQ and a readback, in that order.
+
+## Measured response — 2026-10-13
+
+Aqua measured five live EQs on the original PS headset over the dongle with a Dayton iMM-6 measurement mic and REW sweeps. The setup was rough: the mic lay on a table with the headset face down on top of it, in a room with poor acoustics. The headset and mic were not moved at any point during the tests, so every EQ was measured in the same position as the baseline.
+
+Each EQ was sent live (`0E03`, ACKed) through `device_worker.py`, and saved Custom 4 was left unchanged. Each condition had three sweeps, exported without smoothing. Analysis applied 1/12-octave power smoothing, power-averaged the three runs, subtracted the averaged flat baseline (a 0 dB peak), and compared the difference with RBJ biquads at 48 kHz. Subtracting the baseline cancels the mic, seal and driver response, provided nothing moves.
+
+| EQ | Compiled SHA-256 | Error, 300 Hz–3 kHz (mean / RMS / max) | Spot check |
+|---|---|---|---|
+| Peak 1,000 Hz, -12 dB, Q 2 | `8b7886…` | 0.01 / 0.06 / 0.29 dB | -11.90 dB at 1 kHz (expected -12.00) |
+| Low shelf 500 Hz, -9 dB | `49db29…` | 0.05 / 0.09 / 0.31 dB | -4.45 dB at 500 Hz (expected -4.50) |
+| High shelf 1,200 Hz, -9 dB | `6a2007…` | -0.13 / 0.17 / 0.65 dB | -8.9 to -9.0 dB from 3–5 kHz |
+| High-pass 300 Hz + low-pass 3 kHz, Q 0.7071 | `472d5f…` | -0.01 / 0.07 / 0.26 dB | -3.14 dB at 300 Hz, -3.01 dB at 3 kHz (both expected -3.01) |
+
+![Measured and expected response for the four EQs](docs/measured-response-2026-10-13.svg)
+
+Grey bands mark where the baseline is unreliable. Curves beyond the plot range are clipped to its edge.
+
+The shelves used the experimental `extended-rbj` encoder; the peak and pass pair used the vendor DLL. Between 300 Hz and 3 kHz, all four match their expected curves within about 0.1–0.2 dB RMS. This is the first hardware confirmation of the shelf filters. The high shelf cut 0.3–0.5 dB more than expected from 300–700 Hz; this session cannot tell whether that comes from the encoder or the measurement.
+
+Run-to-run spread of the baseline was 0.02–0.3 dB from 300 Hz to 5 kHz, but up to about 30 dB below 200 Hz and above 5 kHz, where seal leakage and noise dominate. Results outside 200 Hz–5 kHz are not usable, which is why the low-shelf and pass-filter bass regions read far below their expected curves. Bass and treble response remain unmeasured. Raw exports are in Aqua's `Documents/Maxwell Measurements`, not in the repository.
