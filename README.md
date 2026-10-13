@@ -2,7 +2,7 @@
 
 Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, and left/right channel balance. It runs on Windows and macOS.
 
-The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. Exact acoustic response has not been measured. See [PROOF.md](PROOF.md) for the evidence and limits.
+The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
 ## Download
 
@@ -122,7 +122,7 @@ Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_D
 - Peaks: -12 to +12 dB, Q 0.1-20. This path has user listening confirmation.
 - Low/high shelves: -12 to +12 dB, fixed monotonic slope S=1 (Q approximately 0.7071). Frequency sets the shelf midpoint. Shelf slope is not adjustable in this version.
 - Low/high-pass: second order (12 dB/octave asymptotic slope), Q 0.1-20. Gain is unused and must be 0. Q approximately 0.7071 gives the Butterworth response; larger Q adds resonance near the cutoff.
-- **Shelf and pass filters are experimental:** numerical checks pass, but they have not yet been confirmed by listening on the headset. The type selector and compiled result identify them.
+- **Shelf and pass filters are still marked experimental:** numerical checks pass, and a rough measurement on the headset matched them from 300 Hz to 3 kHz (see [PROOF.md](PROOF.md)). Their bass and treble response has not been measured. The type selector and compiled result identify them.
 - Auto preamp subtracts the sum of each filter's maximum boost, including pass-filter resonance. Manual preamp must provide at least that much headroom; maximum attenuation is 60 dB.
 - Compilation checks pole stability and compares decoded quantized response against the RBJ reference. It rejects sampled errors over 0.15 dB. For shelf/pass sets, comparisons floor both curves at -90 dB to handle deep stopband nulls and also check DC/Nyquist and pass-filter resonance. Some low-frequency or high-Q combinations exceed the precision limit; the UI reports the failure instead of sending them.
 - Banks: 44.1, 48, 88.2 and 96 kHz. Firmware version is not identified; USB device revision is not treated as firmware version.
