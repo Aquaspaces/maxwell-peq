@@ -27,6 +27,7 @@ struct Log {
     saves: Vec<(u8, Vec<u8>)>,
     lives: usize,
     selects: Vec<u8>,
+    reloads: Vec<u8>,
 }
 
 struct Mock {
@@ -78,6 +79,11 @@ impl Device for Mock {
             Some(error) => Err(error),
             None => Ok(json!({"accepted": true, "ack_hex": "055b0300030e00"})),
         }
+    }
+
+    fn reload_saved(&mut self, index: u8) -> Result<bool> {
+        self.log.borrow_mut().reloads.push(index);
+        Ok(true)
     }
 }
 
@@ -150,6 +156,7 @@ fn saving_to_the_active_preset_verifies_then_plays_it() {
     assert_eq!(result["saved_verified"], true);
     assert_eq!(result["live_applied"], true);
     assert_eq!(result["state"]["saved_coefficients_hex"], json!(f.desired));
+    assert_eq!(log.reloads, vec![10], "the reload follows the live apply");
 }
 
 #[test]
@@ -162,6 +169,8 @@ fn saving_to_another_preset_leaves_what_plays_alone() {
     assert_eq!(result["live_applied"], false);
     assert_eq!(result["slot"], 0);
     assert_eq!(result["state"]["saved_coefficients_hex"], json!(f.original));
+    assert!(result.get("preset_reloaded").is_none());
+    assert!(log.borrow().reloads.is_empty(), "only the playing preset is reloaded");
 }
 
 #[test]

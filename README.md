@@ -1,8 +1,21 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, saving profiles to the headset's four custom presets with exact readback, switching the active preset, and left/right channel balance. It runs on Windows and macOS.
+Desktop editor for up to ten filters on the Audeze Maxwell, connected by USB-C or its wireless dongle. It has been tested only on the **original Maxwell PlayStation** (see [Headsets](#headsets)). Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, saving profiles to the headset's four custom presets with exact readback, switching the active preset, left/right channel balance, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
+
+## Headsets
+
+| Headset | USB product IDs | Status |
+| --- | --- | --- |
+| Original Maxwell PlayStation | `4B1A` USB-C, `4B19` dongle | Tested |
+| Maxwell 2 | `4B2A` USB-C, `4B28`/`4B29` dongle | Supported but untested |
+| Maxwell 2 ANC | `4BA8`–`4BAA` | Not supported; untested and unknown |
+| Original Maxwell Xbox | | Untested |
+
+Maxwell 2 support comes from static analysis of Audeze HQ 1.2.48 only. HQ sends Maxwell 2 EQ through the same live and save commands as the original, and that is what this app sends. After a save over USB-C, HQ also reselects the active custom preset so the headset reloads it, muting voice prompts for that second; the app does the same, on Maxwell 2 over USB-C only. Nobody has run this app against a Maxwell 2 yet, so start at low volume. Channel balance and the **Headset…** controls stay limited to the original Maxwell.
+
+HQ reads Maxwell 2 ANC EQ with a different command and data layout. What the ANC stores, and whether any of this applies to it, is unknown, so the app refuses it before sending anything.
 
 ## Download
 
@@ -10,6 +23,7 @@ Get the latest build from [Releases](https://github.com/Aquaspaces/maxwell-peq/r
 
 - **Windows:** the `-setup.exe` installer, or the bare `MaxwellPEQ.exe`, which runs from any folder without installing.
 - **macOS 11+:** the universal `.dmg` (Apple silicon and Intel). It isn't signed by Apple, so the first launch is blocked: open System Settings → Privacy & Security and choose **Open Anyway**.
+- **Linux (x64):** the `.deb` (Debian, Ubuntu), the `.rpm` (Fedora, openSUSE) or the `.AppImage`. The `.deb` and `.rpm` install a udev rule that lets you open the headset without root. With the AppImage, install the rule yourself; see [Linux](#linux).
 
 ## Start
 
@@ -33,13 +47,13 @@ cargo tauri build               # also an NSIS installer under target\release\bu
 cargo run -p maxwell-peq -- --serve --offline   # debug build, editor in a browser
 ```
 
-On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+On Linux, install the WebKitGTK and udev headers first (Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libudev-dev`); `cargo tauri build` then builds a `.deb`, `.rpm` and `.AppImage`. On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
 
 The workspace has two crates: `crates/maxwell-core` (filter compiler, APO conversion, profiles, HID protocol, session recovery; no UI) and `src-tauri` (the window, plus the `--serve` and `--worker device` entry points).
 
 ### Releases
 
-`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe and the universal macOS `.dmg`, and uploads them to a **draft** release, which you publish by hand after checking it:
+`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe, the universal macOS `.dmg` and the Linux `.deb`, `.rpm` and `.AppImage`, and uploads them to a **draft** release, which you publish by hand after checking it:
 
 ```powershell
 # bump version in Cargo.toml, commit, then:
@@ -47,7 +61,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows and macOS for every pull request and every push to `main`.
+`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows, macOS and Linux for every pull request and every push to `main`.
 
 ### Python reference implementation
 
@@ -79,13 +93,13 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 
 ## Use the headset
 
-1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. The device bar's connection is **Automatic** by default: it uses USB-C when the cable is plugged in and the dongle otherwise. Choose USB-C or the dongle there to force one.
+1. Connect the headset by USB-C, or connect its wireless dongle with the headset powered on and paired. The device bar's connection is **Automatic** by default: it uses USB-C when the cable is plugged in and the dongle otherwise. Choose USB-C or the dongle there to force one.
 2. Close the Audeze app (the editor offers to).
 3. The editor reads the headset when it opens; click **Read again** after changing presets or connections on the headset.
 4. Drag a profile from **Not on the headset** onto the box next to **Preset 1** to **Preset 4**, or use **Save to Preset N** in its **⋯** menu. Start at low listening volume.
-5. Click a preset's dot or name to make it active. You can also switch on the headset itself; read it again afterwards to update the editor.
+5. Click a preset's dot or name to make it active. You can also switch under **Headset…** or on the headset itself; read it again afterwards to update the editor.
 
-The headset's custom presets are indexes 7 to 10, which the Audeze app shows as Preset 1 to 4. The active one has a green dot, and the device bar names it. Built-in presets can be read but not written. Firmware flashing is not implemented.
+The headset's custom presets are indexes 7 to 10, which the Audeze app shows as Preset 1 to 4. The active one has a green dot, and the device bar names it. Built-in presets can be read but not written. Firmware updates are not supported; use the Audeze app for those.
 
 ## Save to a preset
 
@@ -101,7 +115,7 @@ Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, 
 
 ## Channel balance
 
-**Balance…** in the device bar sets the left and right driver levels, for headsets whose channels don't match. The dialog reads both levels through the selected connection when it opens (**Read headset** reads again), and the app keeps the first reading so **Put back** can always return to it. Change a side by one to three steps at a time and listen; higher values are louder. The headset applies each write immediately.
+**Balance…** in the device bar (original Maxwell only) sets the left and right driver levels, for headsets whose channels don't match. The dialog reads both levels through the selected connection when it opens (**Read headset** reads again), and the app keeps the first reading so **Put back** can always return to it. Change a side by one to three steps at a time and listen; higher values are louder. The headset applies each write immediately.
 
 - Values run from 0 to 150. 150 is a hard ceiling: higher values can damage the drivers, so the app never sends them. 136 and 142 are skipped because the firmware reserves them.
 - Factory values on current firmware are 141 / 149 on the USB-C profile and 147 / 147 on the wireless profile.
@@ -112,11 +126,32 @@ Balance writes are limited to the two level settings and the source profile, and
 
 The balance protocol, value limits and persistence behaviour come from kats1123's [maxwell-firmware-research](https://github.com/kats1123/maxwell-firmware-research) (CC BY 4.0) and [maxwell-balance-and-firmware-tool](https://github.com/kats1123/maxwell-balance-and-firmware-tool) (MIT). No code, DLLs or firmware files from those repositories are included.
 
-## macOS and other systems
+## Headset controls
+
+**Headset…** in the device bar opens the settings Audeze HQ shows on its Sound and Product Settings pages: game/chat mix, volume limiter, sidetone and its level, noise suppression (off, low, high), auto shutdown (5 minutes to never) and voice prompt volume. It also shows the battery level, whether the mic is muted, and the headset's firmware version (and the dongle's, over the dongle). Each change goes to the headset at once and is read back before it counts. If the read-back doesn't match, the dialog says so and asks you to read again.
+
+The same dialog switches between the ten onboard presets. The headset loads the new preset's own EQ, so switching is refused while EQ sent from this app is playing or saved; restore it first. After a switch the app reads the headset again and, on EQ 1 to EQ 4, backs up the new preset so you can edit it.
+
+These commands were decoded from Audeze HQ 1.2.48 and have not been tested on a headset yet. Factory reset and the audio driver reinstall are left out on purpose.
+
+## macOS and Linux
 
 The macOS build reaches the headset through [hidapi](https://github.com/ruabmbua/hidapi-rs) and reads report sizes from the HID report descriptor (`crates/maxwell-core/src/descriptor.rs`). It does everything the Windows build does. The Audeze DLL only exists on Windows, so the Mac always uses the built-in encoder. The Audeze app check looks for processes named `Audeze`, `Audeze HQ` and `AudezeHQ`. On 2026-10-12, on an M1 Pro Mac over USB-C, it read and backed up the headset, applied built-in-encoder peaks and stacked high- and low-pass filters that were clearly audible, restored the backup, and changed balance and put it back. It then switched to the PlayStation dongle, read the headset again, and saved a flat profile to headset storage, which read back exactly. The app window opens and shows the same state.
 
-Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` on Linux. Linux builds compile (hidapi needs `libudev-dev`) but aren't packaged.
+Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` (usually `~/.local/share/maxwell-peq`) on Linux.
+
+### Linux
+
+Linux uses the same hidapi backend, through `/dev/hidraw`. Those nodes belong to root, so the app needs the udev rule in [`src-tauri/linux/70-maxwell-peq.rules`](src-tauri/linux/70-maxwell-peq.rules), which gives the logged-in user access to the Maxwell's control interface over USB-C and the dongle. The `.deb` and `.rpm` install it to `/usr/lib/udev/rules.d` and reload udev. For the AppImage or a source build:
+
+```sh
+sudo cp src-tauri/linux/70-maxwell-peq.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+Then unplug and replug the headset or dongle. Without the rule, the app says it has no permission to open the headset.
+
+On 2026-10-12 the Linux build was tested in WSL2 (Ubuntu 26.04, kernel 6.18) with the dongle passed through by [usbipd-win](https://github.com/dorssel/usbipd-win). It read Custom 4 back byte for byte (the same SHA-256 as the Windows readback), read the balance, and applied a live EQ, which the headset acknowledged with the same reply it gives on Windows. The first read after attaching failed once with a packet-boundary error and the next three passed. Restore, saving to the headset, USB-C and the desktop window have not been tested on Linux, and nothing has been tested on a native Linux machine.
 
 ## Supported values and limits
 

@@ -23,6 +23,11 @@ pub trait Device {
     fn has_storage_space(&mut self) -> Result<bool>;
     fn save_coefficients(&mut self, slot: u8, coefficients: &[u8]) -> Result<Value>;
     fn apply_live(&mut self, coefficients: &[u8]) -> Result<Value>;
+    /// After a save, make the headset play the stored preset at `index` where
+    /// the model needs it (Maxwell 2 over USB). True when it reselected.
+    fn reload_saved(&mut self, _index: u8) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 /// The writes a session may send. Reads are always allowed.
@@ -131,6 +136,8 @@ pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Res
                 state["saved_coefficients_hex"] = json!(hex::encode(&blob));
                 let live = device.apply_live(&blob)?;
                 result.insert("ack_hex".into(), live.get("ack_hex").cloned().unwrap_or(Value::Null));
+                // Custom slots 0..3 are presets 7..10.
+                result.insert("preset_reloaded".into(), json!(device.reload_saved(7 + slot)?));
             }
             result.insert("slot".into(), json!(slot));
             result.insert("live_applied".into(), json!(active));
@@ -170,6 +177,9 @@ pub fn failure(error: &Error, progress: &Progress) -> Value {
 pub fn run(request: &Value) -> (Value, bool) {
     if get(request, "operation").and_then(Value::as_str).is_some_and(|op| crate::balance::OPERATIONS.contains(&op)) {
         return crate::balance::run(request);
+    }
+    if get(request, "operation").and_then(Value::as_str).is_some_and(|op| crate::controls::OPERATIONS.contains(&op)) {
+        return crate::controls::run(request);
     }
     let mut progress = Progress::default();
     let mut open = |access, transport| crate::hid::open(transport, access);

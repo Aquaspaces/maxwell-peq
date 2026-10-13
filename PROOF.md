@@ -35,7 +35,7 @@ App live function: `0x140024C10`. Saved-coefficient write function: `0x140024EF0
 
 Validation completed: 23 unit/integration tests passed with the vendor DLL present; JavaScript syntax check passed. Browser checks at 1280 px and 390 px verified rendering without page overflow, four compiled curves, stale-preview invalidation after Q edits, and a successful read of active built-in preset 4 with Apply disabled. Recovery tests use mocked workers, including pre-send preset changes, timeouts, restoration without recompilation and offline-mode gating.
 
-Response outside 200 Hz–5 kHz and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below and a measured midband response; Xbox and Maxwell 2 remain untested. Dongle testing, Bluetooth playback and preset switching, and a midband response measurement are recorded below.
+Response outside 200 Hz–5 kHz and other firmware revisions remain unverified. The initial format checks have since been supplemented by the user listening test below. Peak filtering has listening confirmation on direct USB original PS hardware. Shelf/pass support has the numerical validation described below and a measured midband response. Every hardware result in this file is from the original Maxwell PlayStation; Xbox, Maxwell 2 and Maxwell 2 ANC remain untested (see the Maxwell 2 section at the end). Dongle testing, Bluetooth playback and preset switching, and a midband response measurement are recorded below.
 
 ## HID contention fix — 2026-10-12
 
@@ -115,3 +115,14 @@ Grey bands mark where the baseline is unreliable. Curves beyond the plot range a
 The shelves used the experimental `extended-rbj` encoder; the peak and pass pair used the vendor DLL. Between 300 Hz and 3 kHz, all four match their expected curves within about 0.1–0.2 dB RMS. This is the first hardware confirmation of the shelf filters. The high shelf cut 0.3–0.5 dB more than expected from 300–700 Hz; this session cannot tell whether that comes from the encoder or the measurement.
 
 Run-to-run spread of the baseline was 0.02–0.3 dB from 300 Hz to 5 kHz, but up to about 30 dB below 200 Hz and above 5 kHz, where seal leakage and noise dominate. Results outside 200 Hz–5 kHz are not usable, which is why the low-shelf and pass-filter bass regions read far below their expected curves. Bass and treble response remain unmeasured. Raw exports are in Aqua's `Documents/Maxwell Measurements`, not in the repository.
+
+## Maxwell 2 and Maxwell 2 ANC — static analysis only
+
+Nothing in this section has run on a Maxwell 2. It comes from Audeze HQ 1.2.48, analysed offline.
+
+- `MaxwellHidApiClient::GetDevType` maps product IDs `4B18`–`4B27` to the original Maxwell, `4B28`–`4B2A` to Maxwell 2, and `4BA8` and up to Maxwell 2 ANC. `IsDongle` marks `4B18`/`4B19`, `4B28`/`4B29` and `4BA8`/`4BA9` as dongles. That `4B2A` is the Maxwell 2 over USB-C is an inference from those ranges.
+- `MaxwellDeviceImpl::Impl::setEqBands` calls the same `MaxwellTransport::writeEqBands` for every model: live `0E03`, the UI records, then the coefficients to `E42C+slot`.
+- For Maxwell 2 not on a dongle, `setEqBands` then sends voice-prompt level 0 (`05 5A 05 00 00 09 20 00 00`), selects the cached current preset (`05 5A 05 00 00 09 00 00 <index>`), sleeps 1,000 ms, and restores the cached voice-prompt level. The app reads the level first (`05 5A 04 00 01 09 20 00`), runs the same sequence after each verified save over USB-C, and checks the preset afterwards. These three commands are allowed only with the save capability, and the preset value only for custom presets 7–10.
+- HQ reads Maxwell 2 ANC EQ through a separate path (`readUserBiquad`, `BytesToMaxwell2AncEq`, its own cache). The app treats product IDs `4BA8`–`4BAF` as ANC and refuses them before any EQ command.
+
+Unknowns: whether Maxwell 2 accepts the original's 844-byte four-rate coefficient blob and encoder output byte for byte, whether live EQ on a Maxwell 2 over USB-C is audible before a save, and whether its balance settings use the same subcommands. Balance is therefore limited to the original Maxwell.

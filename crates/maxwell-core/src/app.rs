@@ -15,8 +15,17 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const DEVICE_ENDPOINTS: [&str; 6] =
-    ["/api/read_device", "/api/save", "/api/select", "/api/balance/read", "/api/balance/apply", "/api/balance/source"];
+pub const DEVICE_ENDPOINTS: [&str; 9] = [
+    "/api/read_device",
+    "/api/save",
+    "/api/select",
+    "/api/balance/read",
+    "/api/balance/apply",
+    "/api/balance/source",
+    "/api/controls/read",
+    "/api/controls/set",
+    "/api/preset/select",
+];
 
 /// Custom preset `slot` (0..3) is headset preset `slot + 7`, shown as Preset
 /// `slot + 1` in the Audeze app.
@@ -39,6 +48,8 @@ pub struct App {
     /// The last balance read in this run; writes need one first.
     pub balance: Value,
     pub data_dir: Option<PathBuf>,
+    /// The last controls read in this run; control writes need one first.
+    pub controls: Value,
     runner: Runner,
 }
 
@@ -52,9 +63,11 @@ fn preset_name(index: &Value) -> String {
     }
 }
 
+/// "Original Maxwell PS · USB-C · Preset 2", with the model the worker detected.
 fn device_line(transport: &str, state: &Value) -> Value {
     json!(format!(
-        "Original Maxwell PS · {} · {}",
+        "{} · {} · {}",
+        state["device"]["model_label"].as_str().unwrap_or("Original Maxwell PS"),
         match transport {
             "usb" => "USB-C",
             "dongle" => "dongle",
@@ -88,10 +101,11 @@ impl App {
             token: token_urlsafe(),
             transport: "auto".into(),
             connection: Value::Null,
-            device: json!("Original Maxwell PlayStation"),
+            device: json!("Audeze Maxwell"),
             index: Value::Null,
             links: load_links(data_dir.as_ref()),
             balance: Value::Null,
+            controls: Value::Null,
             data_dir,
             runner,
         }
@@ -164,6 +178,7 @@ impl App {
             ("data_dir", self.data_dir.as_ref().map_or(Value::Null, |dir| json!(dir.display().to_string()))),
             ("hardware_audio_verified", json!(false)),
             ("balance", self.balance.clone()),
+            ("controls", self.controls.clone()),
         ])
     }
 
@@ -251,6 +266,92 @@ impl App {
             _ => "Source profile set to wireless. Power-cycle the headset for it to take effect.".into(),
         };
         result["message"] = json!(message);
+        Ok(result)
+    }
+
+    /// Chat mix, sidetone, noise reduction and the other everyday controls.
+    /// They change the headset at once; each result names the value it replaced.
+    fn controls(&mut self, path: &str, request: &Value) -> Result<Value> {
+        let read_through = self.controls.get("transport").and_then(Value::as_str).map(str::to_owned);
+        let transport = Self::request_transport(request, read_through.as_deref().unwrap_or(&self.transport))?;
+        if path == "/api/controls/read" {
+            let result = self.run(Worker::Device, &json!({"operation": "controls_read", "transport": transport}))?;
+            self.controls = result.clone();
+            return Ok(result);
+        }
+        let control = get(request, "control").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if control == "preset" {
+            return Err(Error::value("Switch presets with the preset picker."));
+        }
+        match read_through {
+            None => return Err(Error::value("Read the headset controls first.")),
+            Some(read_through) if read_through != transport => {
+                return Err(Error::value("Read the controls again through this connection first."));
+            }
+            Some(_) => {}
+        }
+        let device_request = object([
+            ("operation", json!("control_write")),
+            ("control", json!(control)),
+            ("value", get_or_null(request, "value").clone()),
+            ("transport", json!(transport)),
+        ]);
+        let result = self.write_control(&device_request)?;
+        if let Value::Object(fields) = &mut self.controls {
+            fields.insert(control.clone(), get_or_null(&result, "value").clone());
+            if control == "volume_limiter" {
+                fields.insert("amp_gain".into(), get_or_null(&result, "raw").clone());
+            }
+        }
+        Ok(result)
+    }
+
+    fn write_control(&mut self, device_request: &Value) -> Result<Value> {
+        let outcome = self.run(Worker::Device, device_request);
+        if let Err(Error::Worker(details)) = &outcome
+            && truthy(details.get("write_started").unwrap_or(&Value::Null))
+        {
+            // The headset may hold anything now; make the page read again.
+            self.controls = Value::Null;
+        }
+        let mut result = outcome?;
+        if let Value::Object(fields) = &mut result {
+            fields.remove("write_replies_hex");
+        }
+        Ok(result)
+    }
+
+    /// Switch to any onboard preset from the Headset dialog, then read the
+    /// headset again. Switching never changes what the presets store.
+    fn select_preset(&mut self, request: &Value) -> Result<Value> {
+        let transport = Self::request_transport(request, &self.transport)?;
+        let device_request = object([
+            ("operation", json!("control_write")),
+            ("control", json!("preset")),
+            ("value", get_or_null(request, "index").clone()),
+            ("transport", json!(transport)),
+        ]);
+        let switched = self.write_control(&device_request)?;
+        if let Value::Object(fields) = &mut self.controls {
+            fields.insert("preset".into(), get_or_null(&switched, "value").clone());
+        }
+        let name = get_or_null(&switched["value"], "name").as_str().unwrap_or("the preset").to_owned();
+        let mut result = match self.read_device(&json!({"transport": transport})) {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(Error::other(format!(
+                    "Switched to {name}, but reading it back failed: {error} Read again."
+                )));
+            }
+        };
+        let message = if truthy(get_or_null(&result, "custom")) {
+            format!("Switched to {name}.")
+        } else {
+            format!("Switched to {name}. Make Preset 1 to 4 active to hear your profiles.")
+        };
+        result["message"] = json!(message);
+        result["preset"] = get_or_null(&switched, "value").clone();
+        result["previous"] = get_or_null(&switched, "previous").clone();
         Ok(result)
     }
 
@@ -401,6 +502,8 @@ impl App {
             "/api/read_device" => self.read_device(request),
             "/api/select" => self.select(request),
             "/api/save" => self.save(request),
+            "/api/preset/select" => self.select_preset(request),
+            _ if path.starts_with("/api/controls/") => self.controls(path, request),
             _ => self.balance(path, request),
         }
     }

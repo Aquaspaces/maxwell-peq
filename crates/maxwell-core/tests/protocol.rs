@@ -2,7 +2,8 @@
 //! Ports tests/test_protocol.py, test_storage_protocol.py, test_input_drain.py
 //! and test_device_access.py.
 
-use maxwell_core::hid::{Interface, ReportIo, Session, Transport};
+use maxwell_core::device::Device;
+use maxwell_core::hid::{Interface, Model, ReportIo, Session, Transport, select};
 use maxwell_core::protocol::*;
 use maxwell_core::{Error, Result};
 use std::collections::VecDeque;
@@ -98,8 +99,8 @@ fn preset_select_matches_the_audeze_app() {
     {
         assert!(validate_select(&packet).is_err(), "{}", hex(&packet));
     }
-    // Selecting is never part of the EQ allowlist.
-    assert!(validate_request(&select_preset_command(7).unwrap(), true, true).is_err());
+    // The EQ allowlist only takes a reselect with save access, for the Maxwell 2 reload.
+    assert!(validate_request(&select_preset_command(7).unwrap(), true, false).is_err());
     parse_select_ack(&unhex("055b0500000900000a")).unwrap();
     assert_eq!(
         parse_select_ack(&unhex("055b0500000903000a")).unwrap_err().to_string(),
@@ -330,6 +331,100 @@ fn select_waits_until_the_headset_reports_the_new_preset() {
     assert_eq!(result["select_ack_hex"], "055b05000009000009");
     assert_eq!(session.io.writes.len(), 3);
     assert_eq!(hex(&session.io.writes[0][3..12]), "055a05000009000009");
+}
+
+#[test]
+fn product_ids_pick_the_model_for_the_transport() {
+    let found = vec![(0x4B1A, "m1-usb"), (0x4B19, "m1-dongle"), (0x4B2A, "m2-usb"), (0x0001, "other")];
+    // Two USB headsets at once is ambiguous.
+    assert!(select(found.clone(), Transport::Usb).unwrap_err().to_string().contains("found 2"));
+    assert_eq!(select(found, Transport::Dongle).unwrap(), (Model::Maxwell, 0x4B19, "m1-dongle"));
+    assert_eq!(select(vec![(0x4B2A, ())], Transport::Usb).unwrap(), (Model::Maxwell2, 0x4B2A, ()));
+    for dongle in [0x4B28, 0x4B29] {
+        assert_eq!(select(vec![(dongle, ())], Transport::Dongle).unwrap().0, Model::Maxwell2);
+        assert!(select(vec![(dongle, ())], Transport::Usb).is_err());
+    }
+}
+
+#[test]
+fn maxwell2_anc_is_refused_before_any_eq() {
+    for id in [0x4BA8, 0x4BA9, 0x4BAA] {
+        for transport in [Transport::Usb, Transport::Dongle] {
+            let error = select(vec![(id, ())], transport).unwrap_err().to_string();
+            assert!(error.contains("Maxwell 2 ANC") && error.ends_with("No EQ was sent."), "{error}");
+        }
+    }
+}
+
+#[test]
+fn preset_reselect_needs_the_save_capability() {
+    assert_eq!(hex(&select_preset_command(7).unwrap()), "055a05000009000007");
+    assert_eq!(hex(&write_voice_prompt_command(0).unwrap()), "055a05000009200000");
+    assert_eq!(hex(&read_voice_prompt_command()), "055a040001092000");
+    assert!(select_preset_command(6).is_err() && select_preset_command(11).is_err());
+    for packet in
+        [select_preset_command(10).unwrap(), write_voice_prompt_command(9).unwrap(), read_voice_prompt_command()]
+    {
+        assert!(validate_request(&packet, true, false).is_err(), "{}", hex(&packet));
+        validate_request(&packet, false, true).unwrap();
+    }
+    for other in ["055a05000009000003", "055a05000009290050", "055a050000092f000a"] {
+        assert!(validate_request(&unhex(other), true, true).is_err(), "{other}");
+    }
+}
+
+fn exchange(reply: &[u8]) -> Vec<Vec<u8>> {
+    [vec![empty(); 6], reports(reply)].concat()
+}
+
+fn sent(session: &Session<Script>) -> Vec<String> {
+    session.io.writes.iter().map(|report| hex(&report[3..3 + usize::from(report[1])])).collect()
+}
+
+fn persistent_session(inputs: Vec<Vec<u8>>, model: Model, transport: Transport) -> Session<Script> {
+    let mut session = session(Script::new(inputs, Some(empty())), transport, true);
+    session.allow_persistent = true;
+    session.model = model;
+    session
+}
+
+#[test]
+fn maxwell2_usb_reselects_the_saved_preset_like_audeze_hq() {
+    let prompt = response(0x0901, &[0x20, 0, 0, 5]);
+    let written = response(0x0900, &[0]);
+    let inputs = [
+        exchange(&prompt),
+        exchange(&prompt),
+        exchange(&written),
+        exchange(&written),
+        exchange(&written),
+        exchange(&response(0x0901, &[0, 0, 1, 9])),
+    ]
+    .concat();
+    let mut session = persistent_session(inputs, Model::Maxwell2, Transport::Usb);
+    assert!(session.reload_saved(9).unwrap());
+    assert_eq!(
+        sent(&session),
+        [
+            "055a040001092000",   // read the voice-prompt level
+            "055a040001092000",   // twice, until it is stable
+            "055a05000009200000", // mute prompts
+            "055a05000009000009", // reselect preset 9
+            "055a05000009200005", // restore the prompt level
+            "055a040001090000",   // confirm the preset
+        ]
+    );
+}
+
+#[test]
+fn only_maxwell2_usb_reselects() {
+    for (model, transport) in
+        [(Model::Maxwell, Transport::Usb), (Model::Maxwell, Transport::Dongle), (Model::Maxwell2, Transport::Dongle)]
+    {
+        let mut session = persistent_session(vec![], model, transport);
+        assert!(!session.reload_saved(9).unwrap());
+        assert!(session.io.writes.is_empty());
+    }
 }
 
 #[cfg(windows)]
