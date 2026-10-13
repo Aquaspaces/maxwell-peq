@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const DEVICE_ENDPOINTS: [&str; 8] = [
+pub const DEVICE_ENDPOINTS: [&str; 11] = [
     "/api/read_device",
     "/api/apply",
     "/api/restore",
@@ -24,6 +24,9 @@ pub const DEVICE_ENDPOINTS: [&str; 8] = [
     "/api/balance/read",
     "/api/balance/apply",
     "/api/balance/source",
+    "/api/controls/read",
+    "/api/controls/set",
+    "/api/preset/select",
 ];
 
 const UNCHANGED: &str = "unchanged";
@@ -46,6 +49,8 @@ pub struct App {
     pub session_path: Option<PathBuf>,
     /// The last balance read in this run; writes need one first.
     pub balance: Value,
+    /// The last controls read in this run; control writes need one first.
+    pub controls: Value,
     runner: Runner,
 }
 
@@ -90,6 +95,7 @@ impl App {
             session_recovered: false,
             session_path,
             balance: Value::Null,
+            controls: Value::Null,
             runner,
         };
         if app.session_path.as_ref().is_some_and(|path| path.exists()) {
@@ -231,6 +237,7 @@ impl App {
             ("backup_path", self.backup_path.clone()),
             ("hardware_audio_verified", json!(false)),
             ("balance", self.balance.clone()),
+            ("controls", self.controls.clone()),
         ])
     }
 
@@ -315,6 +322,115 @@ impl App {
         Ok(result)
     }
 
+    /// Chat mix, sidetone, noise reduction and the other everyday controls.
+    /// They change the headset at once; each result names the value it replaced.
+    fn controls(&mut self, path: &str, request: &Value) -> Result<Value> {
+        let read_through = self.controls.get("transport").and_then(Value::as_str).map(str::to_owned);
+        let transport = Self::request_transport(request, read_through.as_deref().unwrap_or(&self.transport))?;
+        if path == "/api/controls/read" {
+            let result = self.run(Worker::Device, &json!({"operation": "controls_read", "transport": transport}))?;
+            self.controls = result.clone();
+            return Ok(result);
+        }
+        let control = get(request, "control").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if control == "preset" {
+            return Err(Error::value("Switch presets with the preset picker."));
+        }
+        match read_through {
+            None => return Err(Error::value("Read the headset controls first.")),
+            Some(read_through) if read_through != transport => {
+                return Err(Error::value("Read the controls again through this connection first."));
+            }
+            Some(_) => {}
+        }
+        let device_request = object([
+            ("operation", json!("control_write")),
+            ("control", json!(control)),
+            ("value", get_or_null(request, "value").clone()),
+            ("transport", json!(transport)),
+        ]);
+        let result = self.write_control(&device_request)?;
+        if let Value::Object(fields) = &mut self.controls {
+            fields.insert(control.clone(), get_or_null(&result, "value").clone());
+            if control == "volume_limiter" {
+                fields.insert("amp_gain".into(), get_or_null(&result, "raw").clone());
+            }
+        }
+        Ok(result)
+    }
+
+    fn write_control(&mut self, device_request: &Value) -> Result<Value> {
+        let outcome = self.run(Worker::Device, device_request);
+        if let Err(Error::Worker(details)) = &outcome
+            && truthy(details.get("write_started").unwrap_or(&Value::Null))
+        {
+            // The headset may hold anything now; make the page read again.
+            self.controls = Value::Null;
+        }
+        let mut result = outcome?;
+        if let Value::Object(fields) = &mut result {
+            fields.remove("write_replies_hex");
+        }
+        Ok(result)
+    }
+
+    /// Switch the onboard preset, then read it as a fresh connection would.
+    /// The headset loads the new preset's own EQ, so any EQ this session sent
+    /// must be put back first.
+    fn select_preset(&mut self, request: &Value) -> Result<Value> {
+        if self.live_state != UNCHANGED || self.storage_state != UNCHANGED {
+            return Err(Error::value(
+                "Restore the original EQ first. It belongs to the preset that is active now. No preset was switched.",
+            ));
+        }
+        let transport = Self::request_transport(request, &self.transport)?;
+        let device_request = object([
+            ("operation", json!("control_write")),
+            ("control", json!("preset")),
+            ("value", get_or_null(request, "index").clone()),
+            ("transport", json!(transport)),
+        ]);
+        let outcome = self.write_control(&device_request);
+        let started = match &outcome {
+            Ok(result) => truthy(get_or_null(result, "changed")),
+            Err(Error::Worker(details)) => truthy(details.get("write_started").unwrap_or(&Value::Null)),
+            Err(_) => false,
+        };
+        if started {
+            // The old backup describes the preset the headset left.
+            self.backup = Value::Null;
+            self.backup_path = Value::Null;
+            self.expected = Value::Null;
+            self.pending = Value::Null;
+            self.persist()?;
+        }
+        let switched = outcome?;
+        if let Value::Object(fields) = &mut self.controls {
+            fields.insert("preset".into(), get_or_null(&switched, "value").clone());
+        }
+        let name = get_or_null(&switched["value"], "name").as_str().unwrap_or("the preset").to_owned();
+        let mut result = match self.read_device(&json!({"transport": transport})) {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(Error::other(format!(
+                    "Switched to {name}, but reading it back failed: {error} Read again."
+                )));
+            }
+        };
+        let custom = truthy(get_or_null(&switched["value"], "custom"));
+        let message = match (custom, truthy(get_or_null(&result, "backup_exists"))) {
+            (true, true) => format!("Switched to {name}. Its saved EQ is backed up, so you can edit it here."),
+            (true, false) => format!("Switched to {name}, but its saved EQ was not backed up. Read again."),
+            (false, _) => format!(
+                "Switched to {name}. Built-in presets can't be edited; switch to EQ 1 to EQ 4 to send your own EQ."
+            ),
+        };
+        result["message"] = json!(message);
+        result["preset"] = get_or_null(&switched, "value").clone();
+        result["previous"] = get_or_null(&switched, "previous").clone();
+        Ok(result)
+    }
+
     fn run(&mut self, worker: Worker, request: &Value) -> Result<Value> {
         (self.runner)(worker, request)
     }
@@ -379,7 +495,7 @@ impl App {
                 (
                     "message",
                     json!(format!(
-                        "Headset read successfully. Preset {index} is built-in. Choose a custom preset in the Audeze app, then read again."
+                        "Headset read successfully. Preset {index} is built-in. Switch to a custom preset (EQ 1 to EQ 4) to send your own EQ."
                     )),
                 ),
             ]));
@@ -432,6 +548,12 @@ impl App {
         }
         if path.starts_with("/api/balance/") {
             return self.balance(path, request);
+        }
+        if path.starts_with("/api/controls/") {
+            return self.controls(path, request);
+        }
+        if path == "/api/preset/select" {
+            return self.select_preset(request);
         }
         if self.backup.is_null() {
             return Err(Error::value("Read and back up the active custom preset first."));

@@ -1,6 +1,6 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the Audeze Maxwell, connected by USB-C or its wireless dongle. It has been tested only on the **original Maxwell PlayStation** (see [Headsets](#headsets)). Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, and left/right channel balance. It runs on Windows and macOS.
+Desktop editor for up to ten filters on the Audeze Maxwell, connected by USB-C or its wireless dongle. It has been tested only on the **original Maxwell PlayStation** (see [Headsets](#headsets)). Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -13,7 +13,7 @@ The connected headset's saved custom preset was read and reproduced **byte for b
 | Maxwell 2 ANC | `4BA8`–`4BAA` | Not supported; untested and unknown |
 | Original Maxwell Xbox | | Untested |
 
-Maxwell 2 support comes from static analysis of Audeze HQ 1.2.48 only. HQ sends Maxwell 2 EQ through the same live and save commands as the original, and that is what this app sends. After a save over USB-C, HQ also reselects the active custom preset so the headset reloads it, muting voice prompts for that second; the app does the same, on Maxwell 2 over USB-C only. Nobody has run this app against a Maxwell 2 yet, so start at low volume, back up first, and expect the Restore buttons to be the way back. Channel balance stays limited to the original Maxwell.
+Maxwell 2 support comes from static analysis of Audeze HQ 1.2.48 only. HQ sends Maxwell 2 EQ through the same live and save commands as the original, and that is what this app sends. After a save over USB-C, HQ also reselects the active custom preset so the headset reloads it, muting voice prompts for that second; the app does the same, on Maxwell 2 over USB-C only. Nobody has run this app against a Maxwell 2 yet, so start at low volume, back up first, and expect the Restore buttons to be the way back. Channel balance and the **Headset…** controls stay limited to the original Maxwell; on a Maxwell 2, switch presets in the Audeze app.
 
 HQ reads Maxwell 2 ANC EQ with a different command and data layout. What the ANC stores, and whether any of this applies to it, is unknown, so the app refuses it before sending anything.
 
@@ -23,6 +23,7 @@ Get the latest build from [Releases](https://github.com/Aquaspaces/maxwell-peq/r
 
 - **Windows:** the `-setup.exe` installer, or the bare `MaxwellPEQ.exe`, which runs from any folder without installing.
 - **macOS 11+:** the universal `.dmg` (Apple silicon and Intel). It isn't signed by Apple, so the first launch is blocked: open System Settings → Privacy & Security and choose **Open Anyway**.
+- **Linux (x64):** the `.deb` (Debian, Ubuntu), the `.rpm` (Fedora, openSUSE) or the `.AppImage`. The `.deb` and `.rpm` install a udev rule that lets you open the headset without root. With the AppImage, install the rule yourself; see [Linux](#linux).
 
 ## Start
 
@@ -46,13 +47,13 @@ cargo tauri build               # also an NSIS installer under target\release\bu
 cargo run -p maxwell-peq -- --serve --offline   # debug build, editor in a browser
 ```
 
-On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+On Linux, install the WebKitGTK and udev headers first (Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libudev-dev`); `cargo tauri build` then builds a `.deb`, `.rpm` and `.AppImage`. On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
 
 The workspace has two crates: `crates/maxwell-core` (filter compiler, APO conversion, profiles, HID protocol, session recovery; no UI) and `src-tauri` (the window, plus the `--serve` and `--worker device` entry points).
 
 ### Releases
 
-`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe and the universal macOS `.dmg`, and uploads them to a **draft** release, which you publish by hand after checking it:
+`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe, the universal macOS `.dmg` and the Linux `.deb`, `.rpm` and `.AppImage`, and uploads them to a **draft** release, which you publish by hand after checking it:
 
 ```powershell
 # bump version in Cargo.toml, commit, then:
@@ -60,7 +61,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows and macOS for every pull request and every push to `main`.
+`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows, macOS and Linux for every pull request and every push to `main`.
 
 ### Python reference implementation
 
@@ -93,12 +94,12 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 ## Use the headset
 
 1. Connect the headset by USB-C, or connect its wireless dongle with the headset powered on and paired. Choose the matching connection in the device bar.
-2. In the Audeze app, select one of the four custom presets, then close the app (the editor offers to).
+2. Close the Audeze app (the editor offers to). To edit, the headset has to be on one of the four custom presets; switch to one under **Headset…** or in the Audeze app.
 3. Click **Connect & back up**. It saves the exact saved coefficients to the backups folder. Built-in presets are readable, but applying requires a custom preset.
 4. Edit. With **Apply live** on, each change plays as soon as it compiles; turn it off to use the **Apply** button instead. Start at low listening volume. An acknowledgement means the headset accepted the command; it is not an audio measurement.
 5. **Restore → Restore live EQ** plays the original preset again without changing headset storage.
 
-Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Choosing presets and firmware flashing are not implemented; the only preset selection is the Maxwell 2 reload after a save, described under [Headsets](#headsets).
+Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Firmware updates are not supported; use the Audeze app for those.
 
 ## Save to the headset
 
@@ -123,11 +124,32 @@ Balance writes are limited to the two level settings and the source profile, and
 
 The balance protocol, value limits and persistence behaviour come from kats1123's [maxwell-firmware-research](https://github.com/kats1123/maxwell-firmware-research) (CC BY 4.0) and [maxwell-balance-and-firmware-tool](https://github.com/kats1123/maxwell-balance-and-firmware-tool) (MIT). No code, DLLs or firmware files from those repositories are included.
 
-## macOS and other systems
+## Headset controls
+
+**Headset…** in the device bar opens the settings Audeze HQ shows on its Sound and Product Settings pages: game/chat mix, volume limiter, sidetone and its level, noise suppression (off, low, high), auto shutdown (5 minutes to never) and voice prompt volume. It also shows the battery level, whether the mic is muted, and the headset's firmware version (and the dongle's, over the dongle). Each change goes to the headset at once and is read back before it counts. If the read-back doesn't match, the dialog says so and asks you to read again.
+
+The same dialog switches between the ten onboard presets. The headset loads the new preset's own EQ, so switching is refused while EQ sent from this app is playing or saved; restore it first. After a switch the app reads the headset again and, on EQ 1 to EQ 4, backs up the new preset so you can edit it.
+
+These commands were decoded from Audeze HQ 1.2.48 and have not been tested on a headset yet. Factory reset and the audio driver reinstall are left out on purpose.
+
+## macOS and Linux
 
 The macOS build reaches the headset through [hidapi](https://github.com/ruabmbua/hidapi-rs) and reads report sizes from the HID report descriptor (`crates/maxwell-core/src/descriptor.rs`). It does everything the Windows build does. The Audeze DLL only exists on Windows, so the Mac always uses the built-in encoder. The Audeze app check looks for processes named `Audeze`, `Audeze HQ` and `AudezeHQ`. On 2026-10-12, on an M1 Pro Mac over USB-C, it read and backed up the headset, applied built-in-encoder peaks and stacked high- and low-pass filters that were clearly audible, restored the backup, and changed balance and put it back. It then switched to the PlayStation dongle, read the headset again, and saved a flat profile to headset storage, which read back exactly. The app window opens and shows the same state.
 
-Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` on Linux. Linux builds compile (hidapi needs `libudev-dev`) but aren't packaged.
+Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` (usually `~/.local/share/maxwell-peq`) on Linux.
+
+### Linux
+
+Linux uses the same hidapi backend, through `/dev/hidraw`. Those nodes belong to root, so the app needs the udev rule in [`src-tauri/linux/70-maxwell-peq.rules`](src-tauri/linux/70-maxwell-peq.rules), which gives the logged-in user access to the Maxwell's control interface over USB-C and the dongle. The `.deb` and `.rpm` install it to `/usr/lib/udev/rules.d` and reload udev. For the AppImage or a source build:
+
+```sh
+sudo cp src-tauri/linux/70-maxwell-peq.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+Then unplug and replug the headset or dongle. Without the rule, the app says it has no permission to open the headset.
+
+On 2026-10-12 the Linux build was tested in WSL2 (Ubuntu 26.04, kernel 6.18) with the dongle passed through by [usbipd-win](https://github.com/dorssel/usbipd-win). It read Custom 4 back byte for byte (the same SHA-256 as the Windows readback), read the balance, and applied a live EQ, which the headset acknowledged with the same reply it gives on Windows. The first read after attaching failed once with a packet-boundary error and the next three passed. Restore, saving to the headset, USB-C and the desktop window have not been tested on Linux, and nothing has been tested on a native Linux machine.
 
 ## Supported values and limits
 

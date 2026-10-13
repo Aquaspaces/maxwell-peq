@@ -490,7 +490,9 @@ function renderDevice() {
   $('audeze-banner').hidden = !showBanner;
   $('show-audeze').hidden = !(view.audeze && state.audezeDismissed);
   $('open-balance').hidden = !live;
+  $('open-headset').hidden = !live;
   renderBalance();
+  renderHeadset();
 }
 
 /* ---------- balance ---------- */
@@ -608,6 +610,126 @@ async function switchSource() {
   });
   if (ok) balanceOp('source', {source: target});
 }
+
+/* ---------- headset controls ---------- */
+// Everyday controls from Audeze HQ. Each change goes to the headset at once and is read back.
+const lastControls = () => status().controls || null;
+const NOISE_LABEL = ['off', 'low', 'high'];
+const CONTROL_LABEL = {
+  chat_mix: 'Game / chat mix', volume_limiter: 'Volume limiter', sidetone: 'Sidetone',
+  sidetone_level: 'Sidetone level', noise_reduction: 'Noise suppression',
+  voice_prompt: 'Voice prompt volume', auto_off: 'Auto shutdown',
+};
+const sidetonePercent = (raw, max) => max ? `${Math.round(100 * raw / max)}%` : '—';
+const voicePercent = v => v === 0 ? '0%' : `${Math.round((v + 1) * 6.25)}%`;
+const chatMixText = v => v === 10 ? 'Even' : v < 10 ? `Game +${10 - v}` : `Chat +${v - 10}`;
+function autoOffText(seconds) {
+  const option = [...$('hs-auto-off').options].find(o => Number(o.value) === seconds);
+  return option ? option.textContent : `${Math.round(seconds / 60)} min`;
+}
+
+function controlText(control, value) {
+  switch (control) {
+    case 'chat_mix': return chatMixText(value);
+    case 'volume_limiter': case 'sidetone': return value ? 'on' : 'off';
+    case 'sidetone_level': return sidetonePercent(value, lastControls()?.sidetone_max);
+    case 'noise_reduction': return NOISE_LABEL[value] ?? String(value);
+    case 'voice_prompt': return voicePercent(value);
+    case 'auto_off': return autoOffText(value);
+    default: return String(value);
+  }
+}
+
+// Inputs follow the last reading. Rendering leaves them alone so a status poll can't undo a drag.
+function setHeadsetInputs(c) {
+  if (!c) return;
+  if (c.preset?.index) $('hs-preset').value = c.preset.index;
+  $('hs-chat-mix').value = c.chat_mix;
+  $('hs-limiter').checked = !!c.volume_limiter;
+  $('hs-sidetone').checked = !!c.sidetone;
+  $('hs-sidetone-level').max = c.sidetone_max || 0;
+  $('hs-sidetone-level').value = c.sidetone_level;
+  for (const radio of document.getElementsByName('hs-noise')) radio.checked = Number(radio.value) === c.noise_reduction;
+  $('hs-auto-off').value = String(c.auto_off);
+  $('hs-voice-prompt').value = c.voice_prompt;
+  renderHeadsetValues();
+}
+
+function renderHeadsetValues() {
+  const c = lastControls();
+  $('hs-chat-mix-value').textContent = c ? chatMixText(Number($('hs-chat-mix').value)) : '—';
+  $('hs-sidetone-level-value').textContent = c ? sidetonePercent(Number($('hs-sidetone-level').value), c.sidetone_max) : '—';
+  $('hs-voice-prompt-value').textContent = c ? voicePercent(Number($('hs-voice-prompt').value)) : '—';
+}
+
+function renderHeadset() {
+  if (!$('headset-dialog').open) return;
+  const s = status(), c = lastControls(), busy = !!state.busy, mine = state.busy === 'headset';
+  const blocked = !s.live_enabled || s.audeze_running;
+  const off = !c || busy || blocked;
+
+  $('hs-battery').textContent = c?.battery != null ? `${c.battery}%` : '—';
+  $('hs-mic').textContent = c?.mic_muted == null ? '—' : c.mic_muted ? 'Muted' : 'On';
+  const firmware = c?.firmware;
+  $('hs-firmware').textContent = !firmware?.headset ? '—'
+    : firmware.dongle ? `${firmware.headset} · dongle ${firmware.dongle}` : firmware.headset;
+
+  for (const id of ['hs-chat-mix', 'hs-limiter', 'hs-sidetone', 'hs-auto-off', 'hs-voice-prompt']) $(id).disabled = off;
+  $('hs-sidetone-level').disabled = off || !c.sidetone_max;
+  for (const radio of document.getElementsByName('hs-noise')) radio.disabled = off;
+
+  // The headset loads the new preset's own EQ, so EQ sent from here has to be put back first.
+  const eqSent = s.live_state !== 'unchanged' || s.storage_state !== 'unchanged';
+  $('hs-preset').disabled = off || eqSent;
+  $('hs-preset-note').textContent = !c ? ''
+    : eqSent ? 'Restore the original EQ before switching. It belongs to the preset that is active now.'
+      : c.preset?.custom ? 'Switching reads the new preset and backs up its EQ.'
+        : 'Built-in presets can’t be edited. Switch to EQ 1 to EQ 4 to send your own EQ.';
+
+  $('headset-read').disabled = busy || blocked;
+  $('headset-read').textContent = mine && state.headsetAction === 'read' ? 'Reading…' : c ? 'Read again' : 'Read headset';
+  const message = s.audeze_running && !mine ? {text: 'Close Audeze App/HQ to change these here.', kind: 'error'} : state.headsetMessage;
+  $('headset-status').textContent = message?.text || '';
+  $('headset-status').dataset.kind = message?.kind || '';
+  renderHeadsetValues();
+}
+
+function openHeadset() {
+  state.headsetMessage = null;
+  setHeadsetInputs(lastControls());
+  $('headset-dialog').showModal();
+  renderHeadset();
+  if (!lastControls() && !$('headset-read').disabled) headsetOp('read');
+}
+
+// Results stay inside the dialog: toasts sit under its backdrop.
+async function headsetOp(action, body = {}) {
+  const path = {read: '/api/controls/read', set: '/api/controls/set', preset: '/api/preset/select'}[action];
+  // Control writes go through the connection the controls were read through.
+  const request = action === 'set' ? body : {...body, transport: $('transport').value};
+  return queue(async () => {
+    state.busy = 'headset'; state.headsetAction = action; state.headsetMessage = null; renderDevice();
+    try {
+      const result = await api(path, request);
+      let text = '';
+      if (action === 'preset') { state.transportDirty = false; text = result.message; }
+      else if (action === 'set') {
+        const label = CONTROL_LABEL[body.control], shown = controlText(body.control, result.value);
+        text = result.changed ? `${label} set to ${shown}.` : `${label} was already ${shown}.`;
+      }
+      state.headsetMessage = text ? {text, kind: 'success'} : null;
+    } catch (error) {
+      state.headsetMessage = {text: error.message, kind: 'error'};
+    } finally {
+      state.busy = null; state.headsetAction = null;
+      await refreshStatus().catch(() => {});
+      setHeadsetInputs(lastControls());
+      renderDevice();
+    }
+  });
+}
+
+const setControl = (control, value) => headsetOp('set', {control, value});
 
 let statusTimer = null;
 async function refreshStatus() {
@@ -1045,6 +1167,21 @@ function wire() {
     balanceOp('apply', {left: first.left, right: first.right});
   });
   $('balance-source-switch').addEventListener('click', switchSource);
+
+  $('open-headset').addEventListener('click', openHeadset);
+  $('headset-read').addEventListener('click', () => headsetOp('read'));
+  $('headset-form').addEventListener('submit', event => event.preventDefault());
+  $('hs-preset').addEventListener('change', () => headsetOp('preset', {index: Number($('hs-preset').value)}));
+  for (const id of ['hs-chat-mix', 'hs-sidetone-level', 'hs-voice-prompt']) $(id).addEventListener('input', renderHeadsetValues);
+  $('hs-chat-mix').addEventListener('change', () => setControl('chat_mix', Number($('hs-chat-mix').value)));
+  $('hs-sidetone-level').addEventListener('change', () => setControl('sidetone_level', Number($('hs-sidetone-level').value)));
+  $('hs-voice-prompt').addEventListener('change', () => setControl('voice_prompt', Number($('hs-voice-prompt').value)));
+  $('hs-limiter').addEventListener('change', () => setControl('volume_limiter', $('hs-limiter').checked));
+  $('hs-sidetone').addEventListener('change', () => setControl('sidetone', $('hs-sidetone').checked));
+  $('hs-auto-off').addEventListener('change', () => setControl('auto_off', Number($('hs-auto-off').value)));
+  for (const radio of document.getElementsByName('hs-noise')) {
+    radio.addEventListener('change', () => { if (radio.checked) setControl('noise_reduction', Number(radio.value)); });
+  }
   for (const id of ['balance-left', 'balance-right']) $(id).addEventListener('input', renderBalance);
   for (const button of $('balance-dialog').querySelectorAll('[data-step]')) {
     const [side, delta] = button.dataset.step.split(':');

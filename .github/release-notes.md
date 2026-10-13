@@ -13,4 +13,10 @@ The Mac build isn't signed by Apple. The first time you open it, macOS blocks it
 
 The Mac build has every feature. It always uses Maxwell PEQ's own filter encoder, because the Audeze library only exists on Windows. EQ, restore and balance have been tested on a Mac over USB-C, and saving to the headset over the dongle.
 
+**Linux (x64)**
+- `Maxwell.PEQ_*_amd64.deb` for Debian and Ubuntu, `Maxwell.PEQ-*.x86_64.rpm` for Fedora and openSUSE. Both install a udev rule so the app can open the headset without root.
+- `Maxwell.PEQ_*_amd64.AppImage` runs without installing, but you need to install the udev rule yourself (see the README's Linux section).
+
+The Linux build uses Maxwell PEQ's own filter encoder, like the Mac build. It has read the headset, read balance and applied live EQ over the dongle; restore and saving to the headset haven't been tested on Linux yet.
+
 Tested on the original Audeze Maxwell (PlayStation), over USB-C or the dongle. Maxwell 2 is supported but untested. Maxwell 2 ANC is not supported.
