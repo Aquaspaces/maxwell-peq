@@ -1,6 +1,6 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, and left/right channel balance. It runs on Windows, macOS and Linux.
+Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -81,12 +81,12 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 ## Use the headset
 
 1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. Choose the matching connection in the device bar.
-2. In the Audeze app, select one of the four custom presets, then close the app (the editor offers to).
+2. Close the Audeze app (the editor offers to). To edit, the headset has to be on one of the four custom presets; switch to one under **Headset…** or in the Audeze app.
 3. Click **Connect & back up**. It saves the exact saved coefficients to the backups folder. Built-in presets are readable, but applying requires a custom preset.
 4. Edit. With **Apply live** on, each change plays as soon as it compiles; turn it off to use the **Apply** button instead. Start at low listening volume. An acknowledgement means the headset accepted the command; it is not an audio measurement.
 5. **Restore → Restore live EQ** plays the original preset again without changing headset storage.
 
-Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Preset selection and firmware flashing are not implemented.
+Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Firmware updates are not supported; use the Audeze app for those.
 
 ## Save to the headset
 
@@ -110,6 +110,14 @@ Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, 
 Balance writes are limited to the two level settings and the source profile, and each value is read back twice before it counts. On 2026-10-12 a write of 147/144 over USB-C from a Mac was heard leaning left, and 147/147 was then written back and read back.
 
 The balance protocol, value limits and persistence behaviour come from kats1123's [maxwell-firmware-research](https://github.com/kats1123/maxwell-firmware-research) (CC BY 4.0) and [maxwell-balance-and-firmware-tool](https://github.com/kats1123/maxwell-balance-and-firmware-tool) (MIT). No code, DLLs or firmware files from those repositories are included.
+
+## Headset controls
+
+**Headset…** in the device bar opens the settings Audeze HQ shows on its Sound and Product Settings pages: game/chat mix, volume limiter, sidetone and its level, noise suppression (off, low, high), auto shutdown (5 minutes to never) and voice prompt volume. It also shows the battery level, whether the mic is muted, and the headset's firmware version (and the dongle's, over the dongle). Each change goes to the headset at once and is read back before it counts. If the read-back doesn't match, the dialog says so and asks you to read again.
+
+The same dialog switches between the ten onboard presets. The headset loads the new preset's own EQ, so switching is refused while EQ sent from this app is playing or saved; restore it first. After a switch the app reads the headset again and, on EQ 1 to EQ 4, backs up the new preset so you can edit it.
+
+These commands were decoded from Audeze HQ 1.2.48 and have not been tested on a headset yet. Factory reset and the audio driver reinstall are left out on purpose.
 
 ## macOS and Linux
 

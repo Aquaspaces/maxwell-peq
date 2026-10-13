@@ -157,6 +157,9 @@ pub fn run(request: &Value) -> (Value, bool) {
     if get(request, "operation").and_then(Value::as_str).is_some_and(|op| crate::balance::OPERATIONS.contains(&op)) {
         return crate::balance::run(request);
     }
+    if get(request, "operation").and_then(Value::as_str).is_some_and(|op| crate::controls::OPERATIONS.contains(&op)) {
+        return crate::controls::run(request);
+    }
     let mut progress = Progress::default();
     let mut open = |live, persistent, transport| crate::hid::open(transport, live, persistent);
     match execute(request, &mut open, &mut progress) {

@@ -9,6 +9,7 @@ pub mod app;
 pub mod audeze;
 pub mod balance;
 pub mod compile;
+pub mod controls;
 pub mod descriptor;
 pub mod device;
 pub mod dsp;

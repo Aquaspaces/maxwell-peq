@@ -7,13 +7,15 @@
 //! `HidD_GetInputReport`, so the app runs sessions in a worker process.
 
 use crate::balance::Settings;
+use crate::controls::Controls;
 use crate::device::Device;
 use crate::json::object;
 use crate::protocol::{
-    InputStream, check_packet, frame, live_command, parse_coefficients, parse_index, parse_live_ack, parse_save_ack,
-    parse_setting, parse_storage_space, parse_ui, read_coefficients_command, read_index_command, read_setting_command,
-    read_ui_command, save_coefficients_command, storage_space_command, validate_request, validate_setting_write,
-    write_setting_command,
+    InputStream, battery_command, check_packet, control_matches, firmware_command, frame, live_command, parse_battery,
+    parse_coefficients, parse_control, parse_firmware, parse_index, parse_live_ack, parse_query_ack, parse_save_ack,
+    parse_setting, parse_storage_space, parse_ui, read_coefficients_command, read_control_command, read_index_command,
+    read_setting_command, read_ui_command, save_coefficients_command, storage_space_command, validate_control,
+    validate_request, validate_setting_write, write_control_command, write_setting_command,
 };
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -80,6 +82,8 @@ pub struct Session<T: ReportIo> {
     pub allow_persistent: bool,
     /// Channel gain and source-profile writes. Never set with the EQ permissions.
     pub allow_settings: bool,
+    /// Control writes (chat mix, sidetone, preset index...). Never set with the EQ permissions.
+    pub allow_controls: bool,
     /// Pause between polls; tests replace it.
     pub sleep: fn(Duration),
 }
@@ -93,6 +97,7 @@ impl<T: ReportIo> Session<T> {
             allow_live,
             allow_persistent,
             allow_settings: false,
+            allow_controls: false,
             sleep: std::thread::sleep,
         }
     }
@@ -101,13 +106,22 @@ impl<T: ReportIo> Session<T> {
         if self.allow_settings && validate_setting_write(packet).is_ok() {
             return Ok(());
         }
+        if validate_control(packet, self.allow_controls).is_ok() {
+            return Ok(());
+        }
         validate_request(packet, self.allow_live, self.allow_persistent)
     }
 
     /// Validate, empty old input, and write every report of one request.
     fn send(&mut self, packet: &[u8]) -> Result<()> {
+        self.send_flagged(packet, self.transport == Transport::Dongle)
+    }
+
+    /// [`Self::send`] with an explicit dongle flag: clearing it on the dongle
+    /// addresses the dongle instead of the headset.
+    fn send_flagged(&mut self, packet: &[u8], dongle: bool) -> Result<()> {
         self.check(packet)?;
-        let reports = frame(packet, self.transport == Transport::Dongle, self.interface.output_size)?;
+        let reports = frame(packet, dongle, self.interface.output_size)?;
         // Empty old responses before writing. Failure to empty aborts the write.
         self.drain()?;
         for report in reports {
@@ -138,10 +152,49 @@ impl<T: ReportIo> Session<T> {
                 if command == 0x0901 && message.get(6) != packet.get(6) {
                     continue;
                 }
+                // 0x2C83 replies put a status first, then the sub-command.
+                if command == 0x2C83 && message.get(7) != packet.get(6) {
+                    continue;
+                }
                 return Ok(Some(message));
             }
         }
         Ok(None)
+    }
+
+    /// Send a query answered by an acknowledgement and a 0x5D notification.
+    /// Both can arrive in one input report, in either order.
+    fn query(&mut self, packet: &[u8], dongle: bool, timeout: f64) -> Result<Vec<u8>> {
+        let (command, _) = check_packet(packet, 0x5A)?;
+        self.send_flagged(packet, dongle)?;
+        let mut stream = InputStream::default();
+        let (mut ack, mut notice) = (None, None);
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout);
+        while Instant::now() < deadline {
+            (self.sleep)(Duration::from_millis(10));
+            for message in stream.feed(&self.io.input()?)? {
+                let kind = message[1];
+                if !matches!(kind, 0x5B | 0x5D) || check_packet(&message, kind)?.0 != command {
+                    continue;
+                }
+                if kind == 0x5B {
+                    ack.get_or_insert(message);
+                } else {
+                    notice.get_or_insert(message);
+                }
+            }
+            if let (Some(ack), Some(notice)) = (&ack, &notice) {
+                parse_query_ack(ack, command)?;
+                return Ok(notice.clone());
+            }
+        }
+        match ack {
+            Some(ack) => {
+                parse_query_ack(&ack, command)?;
+                Err(Error::other("The headset acknowledged the query but sent no answer"))
+            }
+            None => Err(Error::other("No answer to the query")),
+        }
     }
 
     /// Reconnects can leave delayed fragments and notifications queued, and one
@@ -182,7 +235,10 @@ impl<T: ReportIo> Session<T> {
             0x0901 => {
                 parse_setting(&message, packet[6])?;
             }
-            0x0900 => {}
+            0x0900 | 0x2C82 => {}
+            0x2C83 => {
+                parse_control(&message, packet[6])?;
+            }
             _ if packet[7] == 0xEF => {
                 parse_ui(&message, packet[6])?;
             }
@@ -231,6 +287,62 @@ impl<T: ReportIo> Settings for Session<T> {
         Err(Error::other(format!(
             "The headset did not keep the new value (setting 0x{sub:02X}). Read again to see what it holds now."
         )))
+    }
+}
+
+impl<T: ReportIo> Session<T> {
+    /// A control value that two reads in a row agree on.
+    fn stable_control(&mut self, sub: u8) -> Result<u16> {
+        let packet = read_control_command(sub)?;
+        let mut previous = None;
+        for _ in 0..READ_ROUNDS {
+            let value = parse_control(&self.transact(&packet, None)?, sub)?;
+            if previous == Some(value) {
+                return Ok(value);
+            }
+            previous = Some(value);
+            (self.sleep)(Duration::from_millis(120));
+        }
+        Err(Error::other("The headset kept returning different values. Try reading again."))
+    }
+}
+
+impl<T: ReportIo> Controls for Session<T> {
+    fn read_control(&mut self, sub: u8) -> Result<u16> {
+        parse_control(&self.transact(&read_control_command(sub)?, None)?, sub)
+    }
+
+    fn write_control(&mut self, sub: u8, value: u16) -> Result<Option<Vec<u8>>> {
+        let packet = write_control_command(sub, value)?;
+        if !self.allow_controls {
+            return Err(Error::value("Control writes are not enabled for this session"));
+        }
+        self.send(&packet)?;
+        // Write replies are kept for diagnosis only; the read-back decides.
+        let reply = self.reply(&packet, 1.0)?;
+        for attempt in 0..VERIFY_ATTEMPTS {
+            (self.sleep)(Duration::from_millis(if attempt == 0 { 300 } else { 600 }));
+            if control_matches(sub, value, self.stable_control(sub)?) {
+                return Ok(reply);
+            }
+        }
+        Err(Error::other(format!(
+            "The headset did not keep the new value (control 0x{sub:02X}). Read again to see what it holds now."
+        )))
+    }
+
+    fn battery(&mut self) -> Result<u8> {
+        let dongle = self.transport == Transport::Dongle;
+        parse_battery(&self.query(&battery_command(), dongle, 2.0)?)
+    }
+
+    fn firmware(&mut self, dongle: bool) -> Result<String> {
+        if dongle && self.transport != Transport::Dongle {
+            return Err(Error::value("The dongle's firmware can only be read through the dongle"));
+        }
+        // Flags 0x80 address the headset through the dongle; 0 addresses the dongle.
+        let flag = self.transport == Transport::Dongle && !dongle;
+        parse_firmware(&self.query(&firmware_command(), flag, 2.0)?)
     }
 }
 
@@ -310,10 +422,10 @@ impl<T: ReportIo> Device for Session<T> {
 }
 
 #[cfg(windows)]
-pub use windows::{WinHid, open, open_exclusive, open_settings};
+pub use windows::{WinHid, open, open_controls, open_exclusive, open_settings};
 
 #[cfg(not(windows))]
-pub use hidapi_backend::{open, open_settings};
+pub use hidapi_backend::{open, open_controls, open_settings};
 
 /// hidapi, for macOS and Linux. The `hidapi` feature builds it on Windows too, so it
 /// can be checked there; Windows itself uses the native module below.
@@ -321,6 +433,7 @@ pub use hidapi_backend::{open, open_settings};
 pub mod hidapi_backend {
     use super::{BUSY, Interface, LINUX_PERMISSION, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
     use crate::balance::Settings;
+    use crate::controls::Controls;
     use crate::descriptor::report_sizes;
     use crate::device::Device;
     use crate::{Error, Result};
@@ -400,12 +513,20 @@ pub mod hidapi_backend {
         session.allow_settings = allow_write;
         Ok(Box::new(session))
     }
+
+    /// A session that can read controls and, with `allow_write`, change them. No EQ writes.
+    pub fn open_controls(transport: Transport, allow_write: bool) -> Result<Box<dyn Controls>> {
+        let mut session = session(transport, false, false)?;
+        session.allow_controls = allow_write;
+        Ok(Box::new(session))
+    }
 }
 
 #[cfg(windows)]
 mod windows {
     use super::{BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
     use crate::balance::Settings;
+    use crate::controls::Controls;
     use crate::device::Device;
     use crate::{Error, Result};
     use std::ptr::{null, null_mut};
@@ -591,6 +712,13 @@ mod windows {
     pub fn open_settings(transport: Transport, allow_write: bool) -> Result<Box<dyn Settings>> {
         let mut session = session(transport, false, false)?;
         session.allow_settings = allow_write;
+        Ok(Box::new(session))
+    }
+
+    /// A session that can read controls and, with `allow_write`, change them. No EQ writes.
+    pub fn open_controls(transport: Transport, allow_write: bool) -> Result<Box<dyn Controls>> {
+        let mut session = session(transport, false, false)?;
+        session.allow_controls = allow_write;
         Ok(Box::new(session))
     }
 }

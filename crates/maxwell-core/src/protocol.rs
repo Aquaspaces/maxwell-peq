@@ -111,6 +111,174 @@ pub fn validate_setting_write(packet: &[u8]) -> Result<()> {
     check_setting_value(payload[0], payload[2])
 }
 
+/// Headset controls, decoded from Audeze HQ 1.2.48. The first group lives
+/// behind 0x0901 / 0x0900 like the gains; the second behind 0x2C83 (read) and
+/// 0x2C82 (write). None of them is confirmed on hardware yet.
+pub const PRESET_INDEX: u8 = 0x00;
+pub const VOICE_PROMPT: u8 = 0x20;
+/// Read only: 0x00 when muted, 0xFF when not.
+pub const MIC_MUTE: u8 = 0x22;
+pub const NOISE_REDUCTION: u8 = 0x24;
+/// Amp gain. HQ only ever writes the two volume-limiter codes.
+pub const AMP_GAIN: u8 = 0x28;
+pub const SIDETONE_LEVEL: u8 = 0x2C;
+/// Read only: the largest sidetone level the headset accepts.
+pub const MAX_SIDETONE: u8 = 0x2D;
+pub const AUTO_OFF: u8 = 0x01;
+pub const SIDETONE_ON: u8 = 0x07;
+pub const CHAT_MIX: u8 = 0x0B;
+pub const LIMITER_ON: u8 = 136;
+pub const LIMITER_OFF: u8 = 142;
+pub const MAX_CHAT_MIX: u8 = 20;
+pub const MAX_VOICE_PROMPT: u8 = 15;
+/// HQ's auto-shutdown steps in seconds; 0 is Never.
+pub const AUTO_OFF_SECONDS: [u16; 11] = [300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 21600, 0];
+
+const SETTING_CONTROLS: [u8; 7] =
+    [PRESET_INDEX, VOICE_PROMPT, MIC_MUTE, NOISE_REDUCTION, AMP_GAIN, SIDETONE_LEVEL, MAX_SIDETONE];
+const PAIR_CONTROLS: [u8; 3] = [AUTO_OFF, SIDETONE_ON, CHAT_MIX];
+const BATTERY: u16 = 0x0CD6;
+const FIRMWARE: u16 = 0x1C07;
+
+/// A read of one headset control: 0x0901 or 0x2C83, by sub-command.
+pub fn read_control_command(sub: u8) -> Result<Vec<u8>> {
+    if SETTING_CONTROLS.contains(&sub) {
+        return Ok(setting_read_command(sub));
+    }
+    if PAIR_CONTROLS.contains(&sub) {
+        return Ok(vec![0x05, 0x5A, 0x04, 0x00, 0x83, 0x2C, sub, 0x00]);
+    }
+    Err(error(format!("Control 0x{sub:02X} cannot be read")))
+}
+
+fn check_control_value(sub: u8, value: u16) -> Result<()> {
+    let ok = match sub {
+        PRESET_INDEX => (1..=10).contains(&value),
+        VOICE_PROMPT => value <= u16::from(MAX_VOICE_PROMPT),
+        NOISE_REDUCTION => value <= 2,
+        AMP_GAIN => value == u16::from(LIMITER_ON) || value == u16::from(LIMITER_OFF),
+        // The headset reports its own maximum; callers check against it.
+        SIDETONE_LEVEL => value <= 0xFF,
+        SIDETONE_ON => value <= 1,
+        CHAT_MIX => value <= u16::from(MAX_CHAT_MIX),
+        AUTO_OFF => AUTO_OFF_SECONDS.contains(&value),
+        _ => return Err(error(format!("Control 0x{sub:02X} cannot be written"))),
+    };
+    if !ok {
+        return Err(error(format!("{value} is out of range for control 0x{sub:02X}")));
+    }
+    Ok(())
+}
+
+/// A write of one headset control, in the exact form Audeze HQ sends.
+pub fn write_control_command(sub: u8, value: u16) -> Result<Vec<u8>> {
+    check_control_value(sub, value)?;
+    match sub {
+        AUTO_OFF => {
+            let enabled = u8::from(value != 0);
+            let [lo, hi] = value.to_le_bytes();
+            packet(0x2C82, &[AUTO_OFF, 0, enabled, 0, lo, hi, enabled, 0, lo, hi])
+        }
+        SIDETONE_ON | CHAT_MIX => packet(0x2C82, &[sub, 0, value as u8]),
+        _ => packet(0x0900, &[sub, 0, value as u8]),
+    }
+}
+
+/// Whether a read-back value shows that `written` took effect. HQ treats any
+/// amp gain at or below 136 as the limiter being on.
+pub fn control_matches(sub: u8, written: u16, read: u16) -> bool {
+    if sub == AMP_GAIN {
+        return (written == u16::from(LIMITER_ON)) == (read <= u16::from(LIMITER_ON));
+    }
+    written == read
+}
+
+/// Battery level: an acknowledgement, then a 0x5D notification.
+pub fn battery_command() -> Vec<u8> {
+    packet(BATTERY, &[0]).expect("fits")
+}
+
+/// Firmware version string: an acknowledgement, then a 0x5D notification.
+/// Sent with report flags 0 on the dongle, it asks the dongle itself.
+pub fn firmware_command() -> Vec<u8> {
+    packet(FIRMWARE, &[0]).expect("fits")
+}
+
+/// Control reads, battery and firmware queries, and with `allow_write` the
+/// control writes above. Never EQ.
+pub fn validate_control(packet: &[u8], allow_write: bool) -> Result<()> {
+    let (command, payload) = check_packet(packet, 0x5A)?;
+    if packet == battery_command() || packet == firmware_command() {
+        return Ok(());
+    }
+    if SETTING_CONTROLS.iter().chain(&PAIR_CONTROLS).any(|&sub| read_control_command(sub).is_ok_and(|p| p == packet)) {
+        return Ok(());
+    }
+    if allow_write && matches!(command, 0x0900 | 0x2C82) && !payload.is_empty() {
+        let sub = payload[0];
+        let value = match payload {
+            [AUTO_OFF, 0, _, 0, lo, hi, ..] => u16::from_le_bytes([*lo, *hi]),
+            [_, 0, value] => u16::from(*value),
+            _ => return Err(error("Command is outside the controls allowlist")),
+        };
+        if write_control_command(sub, value).is_ok_and(|expected| expected == packet) {
+            return Ok(());
+        }
+    }
+    Err(error("Command is outside the controls allowlist"))
+}
+
+/// The value in a control reply. 0x2C83 replies carry `status, sub, 00, value`.
+pub fn parse_control(packet: &[u8], sub: u8) -> Result<u16> {
+    if SETTING_CONTROLS.contains(&sub) {
+        return parse_setting(packet, sub).map(u16::from);
+    }
+    let (command, payload) = check_packet(packet, 0x5B)?;
+    let size = if sub == AUTO_OFF { 11 } else { 4 };
+    if command != 0x2C83 || payload.len() != size || payload[1..3] != [sub, 0] {
+        return Err(error("Unexpected control reply"));
+    }
+    if payload[0] != 0 {
+        return Err(error(format!("Headset rejected the control read (status {})", payload[0])));
+    }
+    if sub == AUTO_OFF {
+        return Ok(le16(payload, 5));
+    }
+    Ok(u16::from(payload[3]))
+}
+
+/// The acknowledgement before a battery or firmware notification.
+pub fn parse_query_ack(packet: &[u8], command: u16) -> Result<()> {
+    let (actual, payload) = check_packet(packet, 0x5B)?;
+    if actual != command || payload.is_empty() {
+        return Err(error("Unexpected query acknowledgement"));
+    }
+    if payload[0] != 0 {
+        return Err(error(format!("Headset rejected the query (status {})", payload[0])));
+    }
+    Ok(())
+}
+
+pub fn parse_battery(packet: &[u8]) -> Result<u8> {
+    let (command, payload) = check_packet(packet, 0x5D)?;
+    if command != BATTERY || payload.len() < 3 {
+        return Err(error("Unexpected battery notification"));
+    }
+    Ok(payload[2])
+}
+
+pub fn parse_firmware(packet: &[u8]) -> Result<String> {
+    let (command, payload) = check_packet(packet, 0x5D)?;
+    let length = payload.get(2).map(|&n| usize::from(n));
+    match length {
+        Some(length) if command == FIRMWARE && payload.len() >= 3 + length => {
+            let text = String::from_utf8_lossy(&payload[3..3 + length]);
+            Ok(text.trim_end_matches('\0').trim().to_owned())
+        }
+        _ => Err(error("Unexpected firmware notification")),
+    }
+}
+
 pub fn read_ui_command(slot: u8) -> Result<Vec<u8>> {
     check_slot(slot)?;
     packet(0x0A0C, &key_read(UI_KEY + u16::from(slot)))

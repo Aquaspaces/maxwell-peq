@@ -349,6 +349,36 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .balance-persist { grid-column: 1 / -1; font-size: 12px; }
 .balance-credit { padding: 10px 20px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11px; }
 
+/* ---------- headset controls ---------- */
+.dialog.headset { width: min(520px, calc(100vw - 40px)); }
+.headset-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px 18px; overflow-y: auto; }
+.headset-facts { display: grid; grid-template-columns: auto auto 1fr; gap: 18px; }
+.headset-facts dt { color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.headset-facts dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.headset-section { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.headset-section h3 { color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.headset-row { display: grid; grid-template-columns: 150px 1fr 64px; align-items: center; gap: 12px; min-height: 30px; font-size: 13px; }
+.headset-row > :first-child { color: var(--muted); }
+.headset-row > :nth-child(2):last-child { grid-column: 2 / -1; justify-self: start; }
+.headset-row select { min-width: 180px; }
+.headset-row .switch { margin: 0; }
+.headset-row output { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+.headset-range { display: flex; align-items: center; gap: 8px; }
+.headset-range span { color: var(--faint); font-size: 12px; }
+.headset-range input { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; }
+.headset-range input:disabled { cursor: default; opacity: .5; }
+.headset-note { color: var(--faint); font-size: 12px; }
+.headset-note:empty { display: none; }
+.segmented { display: inline-flex; padding: 2px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
+.segmented label { position: relative; }
+.segmented input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.segmented span { display: block; padding: 4px 12px; border-radius: 4px; color: var(--muted); font-weight: 600; cursor: pointer; transition: background-color .15s, color .15s; }
+.segmented input:checked + span { background: var(--raised); color: var(--text); }
+.segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.segmented input:disabled + span { cursor: default; opacity: .5; }
+.headset-actions { display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.headset-hint { flex: 1; color: var(--faint); font-size: 12px; }
+
 @media (max-width: 1100px) {
   .graph-caption .hint { display: none; }
   .device-bar { flex-wrap: wrap; }
