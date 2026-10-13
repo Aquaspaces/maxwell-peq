@@ -116,6 +116,10 @@ The shelves used the experimental `extended-rbj` encoder; the peak and pass pair
 
 Run-to-run spread of the baseline was 0.02–0.3 dB from 300 Hz to 5 kHz, but up to about 30 dB below 200 Hz and above 5 kHz, where seal leakage and noise dominate. Results outside 200 Hz–5 kHz are not usable, which is why the low-shelf and pass-filter bass regions read far below their expected curves. Bass and treble response remain unmeasured. Raw exports are in Aqua's `Documents/Maxwell Measurements`, not in the repository.
 
+## Original Maxwell Xbox — not run
+
+Nothing here has run on an Xbox headset. [kats1123/maxwell-firmware-research](https://github.com/kats1123/maxwell-firmware-research) lists its product IDs as `4B1E` over USB-C and `4B18` over the dongle, alongside the PlayStation IDs, with one vendor ID, usage page `FF13`, report IDs `06`/`07` and 62-byte reports for all four. HQ's `GetDevType` puts both IDs in the original Maxwell's range (below), that project analysed the Xbox firmware image, and its balance commands use the same subcommands `29`/`2A` as this app. The app therefore treats the Xbox IDs as the original Maxwell. Whether the Xbox firmware stores EQ identically is unverified.
+
 ## Maxwell 2 and Maxwell 2 ANC — static analysis only
 
 Nothing in this section has run on a Maxwell 2. It comes from Audeze HQ 1.2.48, analysed offline.

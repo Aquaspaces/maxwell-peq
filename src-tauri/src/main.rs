@@ -17,7 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 
 const USAGE: &str = "Usage: MaxwellPEQ [--offline] [--serve [--port N]]
 
-Parametric EQ editor for the original Audeze Maxwell (PlayStation).
+Parametric EQ editor for the Audeze Maxwell.
 
   --offline   edit and preview only; never open the headset
   --serve     serve the editor at http://127.0.0.1:PORT/ for a browser instead of opening a window

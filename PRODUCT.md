@@ -10,7 +10,7 @@ A Tauri 2 desktop app: the editor is a local web page in the system webview (Web
 
 ## Users
 
-The owner of an Audeze Maxwell, tuning the headset for themselves at a desk while listening. All hardware testing has been on the original Maxwell PlayStation. Maxwell 2 support comes from static analysis of Audeze HQ and is untested; Maxwell 2 ANC is refused. They already use Equalizer APO / AutoEQ-style parametric presets and want to move them onto the headset and switch between several tunings quickly.
+The owner of an Audeze Maxwell, tuning the headset for themselves at a desk while listening. All hardware testing has been on the original Maxwell PlayStation. The Xbox edition is handled as the same headset and is untested. Maxwell 2 support comes from static analysis of Audeze HQ and is untested; Maxwell 2 ANC is refused. They already use Equalizer APO / AutoEQ-style parametric presets and want to move them onto the headset and switch between several tunings quickly.
 
 ## Product Purpose
 

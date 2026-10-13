@@ -53,7 +53,8 @@ impl Transport {
 }
 
 /// Headset models this app talks to. Only the original Maxwell PlayStation is
-/// tested; Maxwell 2 support follows Audeze HQ 1.2.48 and is untested.
+/// tested. The Xbox edition is the same model to HQ and is untested; Maxwell 2
+/// support follows Audeze HQ 1.2.48 and is untested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
     Maxwell,
@@ -76,11 +77,15 @@ impl Model {
     }
 }
 
-/// `(product ID, model, transport)`. Maxwell 2 IDs come from HQ's
+/// `(product ID, model, transport)`. The Xbox IDs come from
+/// kats1123/maxwell-firmware-research; HQ's `GetDevType` puts them in the
+/// original Maxwell's range. Maxwell 2 IDs come from HQ's
 /// `GetDevType`/`IsDongle`; 0x4B2A as its USB headset is inferred.
-pub const PRODUCTS: [(u16, Model, Transport); 5] = [
+pub const PRODUCTS: [(u16, Model, Transport); 7] = [
     (0x4B1A, Model::Maxwell, Transport::Usb),
     (0x4B19, Model::Maxwell, Transport::Dongle),
+    (0x4B1E, Model::Maxwell, Transport::Usb),
+    (0x4B18, Model::Maxwell, Transport::Dongle),
     (0x4B2A, Model::Maxwell2, Transport::Usb),
     (0x4B28, Model::Maxwell2, Transport::Dongle),
     (0x4B29, Model::Maxwell2, Transport::Dongle),
@@ -89,6 +94,16 @@ pub const PRODUCTS: [(u16, Model, Transport); 5] = [
 /// Maxwell 2 ANC stores EQ differently in HQ and is unknown here.
 pub fn is_maxwell2_anc(product_id: u16) -> bool {
     (0x4BA8..=0x4BAF).contains(&product_id)
+}
+
+/// The original Maxwell's Xbox edition, over USB-C or its dongle.
+pub fn is_xbox(product_id: u16) -> bool {
+    matches!(product_id, 0x4B1E | 0x4B18)
+}
+
+/// What the device line calls the connected headset.
+pub fn label(model: Model, product_id: u16) -> &'static str {
+    if is_xbox(product_id) { "Original Maxwell Xbox (untested)" } else { model.label() }
 }
 
 pub fn product(product_id: u16) -> Option<(Model, Transport)> {
@@ -495,7 +510,7 @@ impl<T: ReportIo> Device for Session<T> {
                     ("vid", json!(VENDOR_ID)),
                     ("pid", json!(self.product_id)),
                     ("model", json!(self.model.name())),
-                    ("model_label", json!(self.model.label())),
+                    ("model_label", json!(label(self.model, self.product_id))),
                     ("usage_page", json!(USAGE_PAGE)),
                     ("transport", json!(self.transport.name())),
                     ("path", json!(interface.path)),

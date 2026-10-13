@@ -15,9 +15,11 @@ It has been tested only on the **original Maxwell PlayStation** (see [Headsets](
 | Headset | USB product IDs | Status |
 | --- | --- | --- |
 | Original Maxwell PlayStation | `4B1A` USB-C, `4B19` dongle | Tested |
+| Original Maxwell Xbox | `4B1E` USB-C, `4B18` dongle | Supported but untested |
 | Maxwell 2 | `4B2A` USB-C, `4B28`/`4B29` dongle | Supported but untested |
 | Maxwell 2 ANC | `4BA8`–`4BAA` | Not supported |
-| Original Maxwell Xbox | | Untested |
+
+The Xbox edition's product IDs come from [kats1123/maxwell-firmware-research](https://github.com/kats1123/maxwell-firmware-research). Audeze HQ puts them in the original Maxwell's range, and that project's balance commands are the ones this app sends, so the app treats an Xbox headset exactly like the PlayStation one, including balance and the **Headset…** controls. Nobody has run it on an Xbox headset yet, so start at low volume.
 
 Maxwell 2 support comes only from static analysis of Audeze HQ 1.2.48. HQ sends Maxwell 2 EQ through the same save command as the original, and that is what this app sends. After a save over USB-C, HQ also reselects the active custom preset so the headset reloads it, muting voice prompts for that second; the app does the same, on Maxwell 2 over USB-C only. Nobody has run this app against a Maxwell 2 yet, so start at low volume. Channel balance and the **Headset…** controls stay limited to the original Maxwell.
 
