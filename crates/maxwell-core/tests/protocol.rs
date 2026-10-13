@@ -3,7 +3,7 @@
 //! and test_device_access.py.
 
 use maxwell_core::device::Device;
-use maxwell_core::hid::{Interface, Model, ReportIo, Session, Transport, label, select};
+use maxwell_core::hid::{Interface, Model, PRODUCTS, ReportIo, Session, Transport, label, select};
 use maxwell_core::protocol::*;
 use maxwell_core::{Error, Result};
 use std::collections::VecDeque;
@@ -343,6 +343,15 @@ fn product_ids_pick_the_model_for_the_transport() {
     for dongle in [0x4B28, 0x4B29] {
         assert_eq!(select(vec![(dongle, ())], Transport::Dongle).unwrap().0, Model::Maxwell2);
         assert!(select(vec![(dongle, ())], Transport::Usb).is_err());
+    }
+}
+
+#[test]
+fn the_linux_udev_rule_covers_every_supported_id() {
+    let rule = include_str!("../../../src-tauri/linux/70-maxwell-peq.rules");
+    for (id, ..) in PRODUCTS {
+        let line = format!("ATTRS{{idProduct}}==\"{id:04x}\"");
+        assert!(rule.contains(&line), "the udev rule is missing {id:04x}");
     }
 }
 
