@@ -3,6 +3,7 @@ name = "maxwell-core"
 description = "Filter compiler, profile library, and headset protocol for Maxwell PEQ. No UI."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 publish = false

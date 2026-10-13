@@ -155,3 +155,9 @@ Peak/pass-only sets use the inspected vendor DLL when it is installed, including
 Without the DLL (on macOS, or on Windows without the Audeze app), peak/pass-only sets use the built-in encoder too. Its peak stages copy the vendor's layout: each numerator is scaled so b0 is unity, and the last numerator coefficient is rounded so the stage's DC gain stays exact on the 24-bit grid. Without that, low narrow peaks at 88.2 and 96 kHz lose up to 0.4 dB. `tests/encoder.rs` compiles 400 random peak sets both ways. The built-in encoder builds every set the DLL builds, with responses within 0.21 dB of the DLL's, and builds 91 sets the DLL rejects for precision. A −12 dB peak it built was clearly audible on a Mac, but it hasn't been compared with the DLL by ear. To compare the two by ear on Windows, start the app with `MAXWELL_PEQ_ENCODER=built-in`, which uses the built-in encoder even when the DLL is installed. The editor says which encoder is active.
 
 Dongle requests use the headset route flag `0x80`. Persistent writes are restricted to the four custom coefficient keys `E42C` through `E42F`; arbitrary storage writes, erase commands and firmware operations are excluded.
+
+## License
+
+Maxwell PEQ is free software under the [GNU General Public License v3.0](LICENSE) or any later version. You can use, study, change and share it. If you distribute a modified version, you must release its source under the same license.
+
+The Audeze app and its `AirohaPeqLibrary.dll` are Audeze's and are not covered by this license; Maxwell PEQ never includes them. Maxwell PEQ is not made or endorsed by Audeze.
