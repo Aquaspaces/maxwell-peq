@@ -7,6 +7,9 @@ import server
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
+        audeze = patch.object(server.AudezeWatch, 'running', return_value=[])  # the real check reads this PC's processes
+        audeze.start()
+        self.addCleanup(audeze.stop)
         self.app = server.App(enable_live=True)
         self.snapshot = {'saved_coefficients_hex': '1122', 'slot': 0}
         self.app.backup = {'state': self.snapshot}

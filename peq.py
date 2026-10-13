@@ -13,7 +13,12 @@ import struct
 from extended_filters import rbj_biquad, filter_headroom_db, encode_bank
 
 DLL_SHA256 = '322ac1149eeba9ed55f2466ba706edc92dcdb333cf574a6466abf88e4b3d50be'
-DEFAULT_DLL = Path('X:/audeze-re/extract/audeze-app/AirohaPeqLibrary.dll')
+DLL_NAME = 'AirohaPeqLibrary.dll'
+# The DLL is never redistributed: use the copy the Audeze app installs, or the inspected extract.
+DLL_CANDIDATES = (
+    Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Audeze' / 'AudezeApp' / DLL_NAME,
+    Path('X:/audeze-re/extract/audeze-app') / DLL_NAME,
+)
 RATES = ((1, 44100), (2, 48000), (5, 88200), (6, 96000))
 MAX_BANDS = 10
 FILTER_TYPES = ('peak', 'low_shelf', 'high_shelf', 'low_pass', 'high_pass')
@@ -21,13 +26,16 @@ SHELF_Q = math.sqrt(0.5)
 
 
 def dll_path():
-    return Path(os.environ.get('MAXWELL_PEQ_DLL', str(DEFAULT_DLL))).resolve()
+    if os.environ.get('MAXWELL_PEQ_DLL'):
+        return Path(os.environ['MAXWELL_PEQ_DLL']).resolve()
+    found = [path for path in DLL_CANDIDATES if path.is_file()]
+    return (found or [DLL_CANDIDATES[0]])[0].resolve()
 
 
 def verified_dll():
     path = dll_path()
     if not path.is_file():
-        raise ValueError('AirohaPeqLibrary.dll is missing. Set MAXWELL_PEQ_DLL to the inspected DLL.')
+        raise ValueError('AirohaPeqLibrary.dll was not found. Install the Audeze app, or set MAXWELL_PEQ_DLL to the inspected DLL.')
     if hashlib.sha256(path.read_bytes()).hexdigest() != DLL_SHA256:
         raise ValueError('The PEQ DLL differs from the inspected version; compilation is disabled.')
     return path
@@ -214,7 +222,7 @@ def compile_preset(request):
                 error_floor_db=-90 if experimental else None)
 
 
-if __name__ == '__main__':
+def main():
     import sys
     try:
         result = compile_preset(json.load(sys.stdin))
@@ -222,3 +230,7 @@ if __name__ == '__main__':
     except Exception as exc:
         json.dump({'error': str(exc)}, sys.stdout)
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

@@ -5,3 +5,10 @@ backups/
 profiles/
 *.log
 .venv/
+.impeccable/
+profiles.json
+app.lock
+build/
+dist/
+target/
+src-tauri/gen/

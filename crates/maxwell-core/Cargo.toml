@@ -1,0 +1,39 @@
+[package]
+name = "maxwell-core"
+description = "Filter compiler, profile library, and headset protocol for Maxwell PEQ. No UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+getrandom = "0.3"
+hex = "0.4"
+libloading = "0.8"
+regex = "1"
+serde_json.workspace = true
+sha2 = "0.10"
+tiny_http = "0.12"
+uuid = { version = "1", features = ["v4"] }
+hidapi = { version = "2.6", optional = true }
+
+[features]
+# Builds the hidapi backend on Windows too, so the macOS path can be checked there.
+hidapi = ["dep:hidapi"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+hidapi = "2.6"

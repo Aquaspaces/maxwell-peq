@@ -1,0 +1,577 @@
+{
+ "parse": [
+  {
+   "text": "# AutoEQ style preset\nPreamp: -6.2 dB\nFilter 1: ON LSC Fc 105 Hz Gain 6.0 dB Q 0.70\nFilter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10\nFilter 3: OFF PK Fc 6000 Hz Gain 1 dB Q 4\nFilter 4: ON BP Fc 500 Hz Q 2\nFilter 5: ON HPQ Fc 30 Hz Q 0.7\nDevice: Speakers\n",
+   "result": {
+    "filters": [
+     {
+      "type": "low_shelf",
+      "frequency": 105.0,
+      "gain": 6.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 180.0,
+      "gain": -2.4,
+      "q": 1.1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 6000.0,
+      "gain": 1.0,
+      "q": 4.0,
+      "enabled": false
+     },
+     {
+      "type": "high_pass",
+      "frequency": 30.0,
+      "gain": 0.0,
+      "q": 0.7,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": -6.2,
+    "warnings": [
+     "Line 6: skipped a band-pass filter; the headset cannot use it.",
+     "Line 8: ignored \"Device\"; only Preamp and Filter lines are used.",
+     "The file sets Preamp -6.2 dB. Auto preamp is used instead so boosts cannot clip."
+    ]
+   }
+  },
+  {
+   "text": "Filter: ON PK Fc 25000 Hz Gain 20 dB Q 50",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 20000.0,
+      "gain": 12.0,
+      "q": 20.0,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Line 1: Frequency 25000 is outside 20 to 20000; using 20000.",
+     "Line 1: Gain 20 is outside -12 to 12; using 12.",
+     "Line 1: Q 50 is outside 0.1 to 20; using 20."
+    ]
+   }
+  },
+  {
+   "text": "Filter 1: ON PK Fc 1000 Hz Gain -3 dB BW Oct 1",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 1000.0,
+      "gain": -3.0,
+      "q": 1.414,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": []
+   }
+  },
+  {
+   "text": "Filter 1: ON PK Fc 150 Hz Gain 1 dB Q 1\nFilter 2: ON PK Fc 200 Hz Gain 1 dB Q 1\nFilter 3: ON PK Fc 250 Hz Gain 1 dB Q 1\nFilter 4: ON PK Fc 300 Hz Gain 1 dB Q 1\nFilter 5: ON PK Fc 350 Hz Gain 1 dB Q 1\nFilter 6: ON PK Fc 400 Hz Gain 1 dB Q 1\nFilter 7: ON PK Fc 450 Hz Gain 1 dB Q 1\nFilter 8: ON PK Fc 500 Hz Gain 1 dB Q 1\nFilter 9: ON PK Fc 550 Hz Gain 1 dB Q 1\nFilter 10: ON PK Fc 600 Hz Gain 1 dB Q 1\nFilter 11: ON PK Fc 650 Hz Gain 1 dB Q 1\nFilter 12: ON PK Fc 700 Hz Gain 1 dB Q 1",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 150.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 200.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 250.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 300.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 350.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 400.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 450.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 500.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 550.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 600.0,
+      "gain": 1.0,
+      "q": 1.0,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "The headset holds 10 filters; imported the first 10 of 12."
+    ]
+   }
+  },
+  {
+   "text": "",
+   "error": "No usable filters found. Expected lines like \"Filter 1: ON PK Fc 1000 Hz Gain -3 dB Q 1\"."
+  },
+  {
+   "text": "Preamp: -3 dB",
+   "error": "No usable filters found. Expected lines like \"Filter 1: ON PK Fc 1000 Hz Gain -3 dB Q 1\"."
+  },
+  {
+   "text": "GraphicEQ: 20 0; 40 1",
+   "error": "GraphicEQ presets are not parametric. Export a parametric (PK filter) preset instead."
+  },
+  {
+   "text": "Preamp: -2 dB\r\nPreamp: -1,5 dB\r\nFilter 1: ON PK Fc 1000,5 Hz Gain -3,25 dB Q 1,414\r\n",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 1000.5,
+      "gain": -3.25,
+      "q": 1.414,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": -3.5,
+    "warnings": [
+     "The file sets Preamp -3.5 dB. Auto preamp is used instead so boosts cannot clip."
+    ]
+   }
+  },
+  {
+   "text": "Filter 1: ON LS 6 dB Fc 100 Hz Gain 3 dB\nFilter 2: ON LSC 12 dB Fc 100 Hz Gain 3 dB Q 0.71\nFilter 3: ON HSC 9 dB Fc 8000 Hz Gain -2 dB\nFilter 4: ON HS Fc 8000 Hz Gain -2 dB Q 2",
+   "result": {
+    "filters": [
+     {
+      "type": "low_shelf",
+      "frequency": 100.0,
+      "gain": 3.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "high_shelf",
+      "frequency": 8000.0,
+      "gain": -2.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "high_shelf",
+      "frequency": 8000.0,
+      "gain": -2.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Line 1: skipped a LS 6 dB corner-frequency shelf; only center-frequency S=1 shelves are supported.",
+     "Line 3: shelf slope 9 dB changed to the headset's fixed S=1 slope.",
+     "Line 4: shelf Q 2 changed to 0.707; the headset uses a fixed S=1 slope."
+    ]
+   }
+  },
+  {
+   "text": "Filter 1: ON LP Fc 18000 Hz Gain 3 dB\nFilter 2: ON HP Fc 10 Hz Q 30\nFilter 3: ON PK Fc 300 Hz\nFilter 4: ON PK Fc 300 Hz Gain 2 dB\nFilter 5: ON NO Fc 60 Hz\nFilter 6: ON XYZ Fc 60 Hz\nFilter 7: ON PK Gain 3 dB Q 1\nFilter 8: on modal Fc 75 Hz Gain -4 dB Q 9\nFilter 9: ON PEQ Fc 0.5 Hz Gain -14 dB Q 0.01",
+   "result": {
+    "filters": [
+     {
+      "type": "low_pass",
+      "frequency": 18000.0,
+      "gain": 0.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "high_pass",
+      "frequency": 20.0,
+      "gain": 0.0,
+      "q": 20.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 300.0,
+      "gain": 0.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 300.0,
+      "gain": 2.0,
+      "q": 1.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 75.0,
+      "gain": -4.0,
+      "q": 9.0,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 20.0,
+      "gain": -12.0,
+      "q": 0.1,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Line 1: pass filters have no gain; ignored 3 dB.",
+     "Line 2: Frequency 10 is outside 20 to 20000; using 20.",
+     "Line 2: Q 30 is outside 0.1 to 20; using 20.",
+     "Line 3: peak had no gain; using 0 dB.",
+     "Line 3: peak had no Q; using 1.",
+     "Line 4: peak had no Q; using 1.",
+     "Line 5: skipped a notch filter; the headset cannot use it.",
+     "Line 6: skipped unknown filter type XYZ.",
+     "Line 7: skipped a filter with no Fc frequency.",
+     "Line 9: Frequency 0.5 is outside 20 to 20000; using 20.",
+     "Line 9: Gain -14 is outside -12 to 12; using -12.",
+     "Line 9: Q 0.01 is outside 0.1 to 20; using 0.1."
+    ]
+   }
+  },
+  {
+   "text": "Copy: L=R\nInclude: other.txt\n  # only a comment\nChannel: L\nFilter 1: ON PK Fc 2000 Hz Gain 1.234567 dB Q 0.123456",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 2000.0,
+      "gain": 1.23,
+      "q": 0.123,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Line 1: ignored \"Copy\"; only Preamp and Filter lines are used.",
+     "Line 2: ignored \"Include\"; only Preamp and Filter lines are used.",
+     "Line 4: ignored \"Channel\"; only Preamp and Filter lines are used."
+    ]
+   }
+  },
+  {
+   "text": "Filter 1: ON HSC Fc 4000 Hz Gain -30 dB Q 0.7071\nFilter 2: ON LPQ Fc 15000 Hz Q 0.5\nFilter 3: ON LS1 Fc 100 Hz Gain 2 dB",
+   "result": {
+    "filters": [
+     {
+      "type": "high_shelf",
+      "frequency": 4000.0,
+      "gain": -12.0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "low_pass",
+      "frequency": 15000.0,
+      "gain": 0.0,
+      "q": 0.5,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Line 1: Gain -30 is outside -12 to 12; using -12.",
+     "Line 3: skipped a first-order low shelf filter; the headset cannot use it."
+    ]
+   }
+  },
+  {
+   "text": "{\"filters\": [{\"type\": \"PK\", \"frequency\": 1000, \"gain\": -3, \"q\": 1}, {\"type\": \"low_pass\", \"frequency\": 9000, \"gain\": 4}, {\"type\": \"high_shelf\", \"frequency\": 5000, \"gain\": 2, \"q\": 3, \"enabled\": false}], \"preamp\": -4}",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 1000,
+      "gain": -3,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "low_pass",
+      "frequency": 9000,
+      "gain": 0,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "high_shelf",
+      "frequency": 5000,
+      "gain": 2,
+      "q": 0.7071067811865476,
+      "enabled": false
+     }
+    ],
+    "preamp": -4,
+    "source_preamp": null,
+    "warnings": []
+   }
+  },
+  {
+   "text": "{\"filters\": [{\"frequency\": 100, \"gain\": 1, \"q\": 1}, {\"frequency\": 200, \"gain\": 1, \"q\": 1}, {\"frequency\": 300, \"gain\": 1, \"q\": 1}, {\"frequency\": 400, \"gain\": 1, \"q\": 1}, {\"frequency\": 500, \"gain\": 1, \"q\": 1}, {\"frequency\": 600, \"gain\": 1, \"q\": 1}, {\"frequency\": 700, \"gain\": 1, \"q\": 1}, {\"frequency\": 800, \"gain\": 1, \"q\": 1}, {\"frequency\": 900, \"gain\": 1, \"q\": 1}, {\"frequency\": 1000, \"gain\": 1, \"q\": 1}, {\"frequency\": 1100, \"gain\": 1, \"q\": 1}, {\"frequency\": 1200, \"gain\": 1, \"q\": 1}]}",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 100,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 200,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 300,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 400,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 500,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 600,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 700,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 800,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 900,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 1000,
+      "gain": 1,
+      "q": 1,
+      "enabled": true
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": null,
+    "warnings": [
+     "Only the first 10 of 12 filters were imported."
+    ]
+   }
+  },
+  {
+   "text": "{\"filters\": []}",
+   "error": "The preset has no filters."
+  },
+  {
+   "text": "{\"presets\": 1}",
+   "error": "JSON presets need a \"filters\" list."
+  },
+  {
+   "text": "{\"filters\": [{\"type\": \"notch\", \"frequency\": 1}]}",
+   "error": "Filter 1: unknown filter type."
+  },
+  {
+   "text": "{\"filters\": [3]}",
+   "error": "Filter 1 must be an object."
+  },
+  {
+   "text": "Preamp: 2 dB\nFilter 1: OFF PK Fc 1000 Hz Gain 0 dB Q 1",
+   "result": {
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 1000.0,
+      "gain": 0.0,
+      "q": 1.0,
+      "enabled": false
+     }
+    ],
+    "preamp": "auto",
+    "source_preamp": 2.0,
+    "warnings": [
+     "The file sets Preamp 2 dB. Auto preamp is used instead so boosts cannot clip."
+    ]
+   }
+  }
+ ],
+ "export": [
+  {
+   "preset": {
+    "preamp": "auto",
+    "filters": [
+     {
+      "type": "low_shelf",
+      "frequency": 105,
+      "gain": 5.5,
+      "q": 0.7071067811865476,
+      "enabled": true
+     },
+     {
+      "type": "peak",
+      "frequency": 1450,
+      "gain": 2.1,
+      "q": 2,
+      "enabled": false
+     },
+     {
+      "type": "low_pass",
+      "frequency": 16000,
+      "gain": 0,
+      "q": 0.7071,
+      "enabled": true
+     }
+    ]
+   },
+   "preamp_db": -7.6,
+   "text": "Preamp: -7.6 dB\nFilter 1: ON LSC Fc 105 Hz Gain 5.5 dB Q 0.7071\nFilter 2: OFF PK Fc 1450 Hz Gain 2.1 dB Q 2\nFilter 3: ON LPQ Fc 16000 Hz Q 0.7071\n"
+  },
+  {
+   "preset": {
+    "preamp": -3.25,
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 1000.123456,
+      "gain": -1e-05,
+      "q": 1.4142135
+     }
+    ]
+   },
+   "preamp_db": null,
+   "text": "Preamp: -3.25 dB\nFilter 1: ON PK Fc 1000.1235 Hz Gain 0 dB Q 1.4142\n"
+  },
+  {
+   "preset": {
+    "preamp": "auto",
+    "filters": [
+     {
+      "type": "high_shelf",
+      "frequency": 8000,
+      "gain": -2,
+      "q": 0.7071067811865476
+     },
+     {
+      "type": "high_pass",
+      "frequency": 20,
+      "gain": 0,
+      "q": 0.5
+     }
+    ]
+   },
+   "preamp_db": null,
+   "text": "Filter 1: ON HSC Fc 8000 Hz Gain -2 dB Q 0.7071\nFilter 2: ON HPQ Fc 20 Hz Q 0.5\n"
+  },
+  {
+   "preset": {
+    "preamp": 0,
+    "filters": [
+     {
+      "type": "peak",
+      "frequency": 20000,
+      "gain": 12,
+      "q": 20,
+      "enabled": true
+     }
+    ]
+   },
+   "preamp_db": -12,
+   "text": "Preamp: 0 dB\nFilter 1: ON PK Fc 20000 Hz Gain 12 dB Q 20\n"
+  }
+ ]
+}

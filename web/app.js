@@ -1,388 +1,1104 @@
 'use strict';
-const $ = (id) => document.getElementById(id);
-const state = {token: null, status: {}, busy: false, compiled: null, signature: null, transportDirty: false, filters: [{type: 'peak', frequency: 1000, gain: -3, q: 1, enabled: true}]};
-const filterTypes = {peak: 'Peak', low_shelf: 'Low shelf', high_shelf: 'High shelf', low_pass: 'Low-pass', high_pass: 'High-pass'};
-const shelfQ = Math.SQRT1_2;
-const isPass = type => type === 'low_pass' || type === 'high_pass';
-const isShelf = type => type === 'low_shelf' || type === 'high_shelf';
-const curveColors = ['#195fa5', '#ae5c26', '#337557', '#784a91'];
+const $ = id => document.getElementById(id);
+const {SHELF_Q, isPass, isShelf} = PEQGraph;
+const TYPES = {peak: 'Peak', low_shelf: 'Low shelf', high_shelf: 'High shelf', low_pass: 'Low-pass', high_pass: 'High-pass'};
+const MAX_FILTERS = 10;
 
-function showMessage(text, error = false) {
-  $('message').textContent = text;
-  $('message').className = error ? 'error' : '';
-  $('message').hidden = false;
-}
-function download(name, data) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], {type: 'application/json'}));
-  const link = document.createElement('a'); link.href = url; link.download = name; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-function payload() {
-  return {filters: state.filters.map(f => ({...f})), preamp: $('preamp-mode').value === 'auto' ? 'auto' : Number($('preamp-value').value)};
-}
-function isCurrent() { return state.compiled && state.signature === JSON.stringify(payload()); }
-function setBusy(busy) { state.busy = busy; updateControls(); }
-function updateControls() {
-  const current = isCurrent();
-  const deviceAllowed = !!state.status.live_enabled && !!state.token;
-  const storage = state.status.storage_state || 'unchanged';
-  const untouched = state.status.live_state === 'unchanged' && storage === 'unchanged';
-  const uncertain = state.status.live_state === 'uncertain' || storage === 'uncertain';
-  const sameTransport = $('transport').value === (state.status.transport || 'usb');
-  const canWrite = !state.busy && deviceAllowed && state.status.backup_exists && sameTransport;
-  $('compile').disabled = state.busy || !state.token || !state.status.dll_available;
-  $('compile').textContent = state.busy ? 'Working…' : 'Compile preview';
-  $('add').disabled = state.busy || state.filters.length >= 10;
-  $('import').disabled = state.busy;
-  $('export').disabled = state.busy;
-  $('transport').disabled = state.busy || !deviceAllowed || storage === 'uncertain';
-  $('connect').disabled = state.busy || !deviceAllowed || storage === 'uncertain';
-  $('read-device').disabled = state.busy || !deviceAllowed || !untouched;
-  $('apply').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
-  $('save').disabled = !canWrite || !state.status.dll_available || uncertain || !current;
-  $('restore').disabled = !canWrite || storage === 'uncertain';
-  $('restore-saved').disabled = !canWrite || storage === 'unchanged';
-  $('download-compiled').disabled = state.busy || !current;
-  $('preview-state').textContent = current ? 'Compiled preview · Not a measurement' : state.compiled ? 'Filters changed · Compile again' : 'Compile to preview';
-  $('response-plot').style.opacity = state.compiled && !current ? '.4' : '1';
-  $('filter-count').textContent = `${state.filters.length} / 10`;
-  updateProfileControls();
-}
-function changed() {
-  state.editorEdited = true;
-  $('preamp-result').textContent = '';
-  $('manual-preamp').hidden = $('preamp-mode').value !== 'manual';
-  $('preamp-value').required = $('preamp-mode').value === 'manual';
-  $('preamp-value').disabled = $('preamp-mode').value !== 'manual';
-  updateControls();
-  saveDraft();
-}
-function renderFilters() {
-  $('filter-rows').replaceChildren();
-  state.filters.forEach((filter, index) => {
-    const row = document.createElement('tr');
-    row.className = filter.enabled ? '' : 'disabled-row';
-    const onCell = document.createElement('td');
-    const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = filter.enabled;
-    enabled.setAttribute('aria-label', `Enable filter ${index + 1}`);
-    enabled.addEventListener('change', () => { filter.enabled = enabled.checked; row.className = enabled.checked ? '' : 'disabled-row'; changed(); });
-    onCell.append(enabled); row.append(onCell);
-    const label = document.createElement('td'); label.className = 'filter-label'; label.textContent = String(index + 1).padStart(2, '0'); row.append(label);
-    const typeCell = document.createElement('td'); const typeSelect = document.createElement('select');
-    typeSelect.setAttribute('aria-label', `Filter type, filter ${index + 1}`);
-    for (const [value, text] of Object.entries(filterTypes)) {
-      const option = document.createElement('option'); option.value = value; option.textContent = text; typeSelect.append(option);
-    }
-    typeSelect.value = filter.type || 'peak';
-    typeSelect.addEventListener('change', () => {
-      filter.type = typeSelect.value;
-      if (isPass(filter.type)) { filter.gain = 0; filter.q = shelfQ; }
-      else if (isShelf(filter.type)) filter.q = shelfQ;
-      renderFilters(); changed();
-      $('filter-rows').children[index].querySelector('select').focus();
-    });
-    typeCell.append(typeSelect); row.append(typeCell);
-    for (const [key, title, min, max] of [['frequency', 'Frequency in Hz', 20, 20000], ['gain', 'Gain in dB', -12, 12], ['q', 'Q factor', 0.1, 20]]) {
-      const cell = document.createElement('td'); const input = document.createElement('input');
-      Object.assign(input, {type: 'number', value: filter[key], min: String(min), max: String(max), step: 'any', required: true});
-      input.setAttribute('aria-label', `${title}, filter ${index + 1}`);
-      if (key === 'gain' && isPass(filter.type)) {
-        input.disabled = true; input.title = 'Pass filters do not use a gain setting.';
-      }
-      if (key === 'q' && isShelf(filter.type)) {
-        input.disabled = true; input.value = '0.7071'; input.title = 'Shelf slope is fixed at S = 1. Q is not adjustable for shelves.';
-      }
-      input.addEventListener('input', () => { filter[key] = input.value === '' ? null : Number(input.value); changed(); });
-      cell.append(input);
-      if (key === 'q' && isShelf(filter.type)) {
-        const note = document.createElement('small'); note.className = 'fixed-value-note'; note.textContent = 'Fixed slope S = 1'; cell.append(note);
-      }
-      row.append(cell);
-    }
-    const removeCell = document.createElement('td'); const remove = document.createElement('button');
-    remove.type = 'button'; remove.className = 'quiet remove'; remove.setAttribute('aria-label', `Remove filter ${index + 1}`);
-    remove.disabled = state.filters.length === 1;
-    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 6 12 12M6 18 18 6"/></svg>';
-    remove.addEventListener('click', () => { state.filters.splice(index, 1); renderFilters(); changed(); });
-    removeCell.append(remove); row.append(removeCell); $('filter-rows').append(row);
+const state = {
+  token: null, status: null, transportDirty: false, busy: null,
+  library: {profiles: [], active: null}, preset: null, selected: 0,
+  history: new Map(), committed: null,
+  compiled: null, compileError: null, attempted: new Set(),
+  audezeDismissed: false, recoveryShown: false, profileKey: '',
+};
+
+/* ---------- formatting ---------- */
+const round = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
+const minus = text => text.replace(/^-/, '−');
+const fmtDb = (value, digits = 1) => `${value > 0 ? '+' : ''}${minus(value.toFixed(digits))} dB`;
+const fmtHz = f => f >= 1000 ? `${round(f / 1000, f >= 10000 ? 1 : 2)} kHz` : `${round(f, 1)} Hz`;
+const clone = value => JSON.parse(JSON.stringify(value));
+
+/* ---------- requests ---------- */
+// In the desktop app requests go over Tauri IPC; in a browser (`--serve`) over HTTP with the session token.
+const tauri = window.__TAURI__;
+
+async function api(path, body, options = {}) {
+  const post = body !== undefined;
+  if (tauri) {
+    try { return await (post ? tauri.core.invoke('post', {path, body}) : tauri.core.invoke('get', {path})); }
+    catch (error) { throw new Error(typeof error === 'string' ? error : error?.message || String(error)); }
+  }
+  const response = await fetch(path, {
+    method: post ? 'POST' : 'GET', keepalive: !!options.keepalive,
+    headers: post ? {'Content-Type': 'application/json', 'X-Session-Token': state.token || ''} : {},
+    ...(post ? {body: JSON.stringify(body)} : {}),
   });
-  updateControls();
-}
-async function api(path, body) {
-  const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : {'Content-Type': 'application/json', 'X-Session-Token': state.token || ''}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   let result;
-  try { result = await response.json(); } catch { throw new Error(`Local server returned an unreadable response (${response.status}).`); }
+  try { result = await response.json(); } catch { throw new Error(`The app's local server sent an unreadable reply (${response.status}).`); }
   if (!response.ok || result.error) throw new Error(result.error || `Request failed (${response.status}).`);
   return result;
 }
+
+// Compiles and device operations share the server's device lock, so they run one at a time.
+let deviceChain = Promise.resolve();
+const queue = task => { const run = deviceChain.then(task, task); deviceChain = run.catch(() => {}); return run; };
+let saveChain = Promise.resolve();
+const queueSave = task => { const run = saveChain.then(task, task); saveChain = run.catch(() => {}); return run; };
+
+/* ---------- toasts ---------- */
+function toast(text, kind = 'info') {
+  const box = $('toasts');
+  const item = document.createElement('div');
+  item.className = `toast ${kind}`;
+  if (kind === 'error') item.setAttribute('role', 'alert');
+  const message = document.createElement('p'); message.textContent = text;
+  const close = document.createElement('button');
+  close.type = 'button'; close.className = 'icon-button'; close.setAttribute('aria-label', 'Dismiss');
+  close.innerHTML = '<svg><use href="#i-close"/></svg>';
+  const remove = () => { item.classList.add('leaving'); setTimeout(() => item.remove(), 160); };
+  close.addEventListener('click', remove);
+  item.append(message, close);
+  box.append(item);
+  while (box.children.length > 3) box.firstElementChild.remove();
+  setTimeout(remove, kind === 'error' ? 9000 : 5000);
+}
+
+/* ---------- presets ---------- */
+const flatPreset = () => ({filters: [{type: 'peak', frequency: 1000, gain: 0, q: 1, enabled: true}], preamp: 'auto'});
+
+function normalizeFilter(f) {
+  const type = TYPES[f.type] ? f.type : 'peak';
+  return {type, frequency: f.frequency ?? null, gain: isPass(type) ? 0 : f.gain ?? null,
+    q: isShelf(type) ? SHELF_Q : f.q ?? null, enabled: f.enabled !== false};
+}
+const payload = (preset = state.preset) => ({filters: preset.filters.map(normalizeFilter), preamp: preset.preamp ?? 'auto'});
+const r6 = v => typeof v === 'number' ? round(v, 6) : v;
+function canon(preset) {
+  if (!preset || !Array.isArray(preset.filters)) return null;
+  const p = payload(preset);
+  return JSON.stringify({filters: p.filters.map(f => ({type: f.type, frequency: r6(f.frequency), gain: r6(f.gain), q: r6(f.q), enabled: f.enabled})),
+    preamp: p.preamp === 'auto' ? 'auto' : r6(p.preamp)});
+}
+const signature = () => canon(state.preset);
+
+function problems(preset = state.preset) {
+  const list = [];
+  const inRange = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+  preset.filters.forEach((f, i) => {
+    if (!inRange(f.frequency, 20, 20000)) list.push({index: i, field: 'frequency', text: `Filter ${i + 1}: frequency must be 20 to 20,000 Hz.`});
+    if (!isPass(f.type) && !inRange(f.gain, -12, 12)) list.push({index: i, field: 'gain', text: `Filter ${i + 1}: gain must be −12 to +12 dB.`});
+    if (!isShelf(f.type) && !inRange(f.q, 0.1, 20)) list.push({index: i, field: 'q', text: `Filter ${i + 1}: Q must be 0.1 to 20.`});
+  });
+  if (preset.preamp !== 'auto' && !inRange(preset.preamp, -60, 0)) list.push({index: -1, field: 'preamp', text: 'Manual preamp must be −60 to 0 dB.'});
+  return list;
+}
+
+/* ---------- profiles ---------- */
+const activeProfile = () => state.library.profiles.find(p => p.id === state.library.active);
+
+function uniqueName(base) {
+  const names = new Set(state.library.profiles.map(p => p.name.toLowerCase()));
+  if (!names.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) if (!names.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
+}
+
+function historyFor(id) {
+  if (!state.history.has(id)) state.history.set(id, {undo: [], redo: []});
+  return state.history.get(id);
+}
+
+function loadActive() {
+  const profile = activeProfile();
+  state.preset = clone(profile.preset);
+  state.preset.filters = state.preset.filters.map(normalizeFilter);
+  state.committed = JSON.stringify(state.preset);
+  state.selected = Math.min(state.selected, state.preset.filters.length - 1);
+  if (state.selected < 0) state.selected = 0;
+  $('profile-name').value = profile.name;
+  renderAll();
+  compileSoon(0);
+}
+
+let saveTimer = null, pendingSave = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  const id = state.library.active, preset = payload();
+  const profile = activeProfile(); if (profile) profile.preset = preset;
+  pendingSave = {id, preset};
+  saveTimer = setTimeout(() => flushSave(), 500);
+}
+function flushSave(keepalive = false) {
+  clearTimeout(saveTimer);
+  if (!pendingSave) return saveChain;
+  const {id, preset} = pendingSave; pendingSave = null;
+  return persist(id, {preset}, keepalive);
+}
+function persist(id, changes, keepalive = false) {
+  return queueSave(() => api('/api/profiles/save', {id, ...changes}, {keepalive}))
+    .catch(error => toast(`Couldn't save the profile: ${error.message}`, 'error'));
+}
+
+function adoptLibrary(result) {
+  state.library = {profiles: result.profiles, active: result.active};
+}
+
+async function activate(id) {
+  if (id === state.library.active) return;
+  if (document.activeElement === $('profile-name')) $('profile-name').blur();
+  await flushSave();
+  const previous = state.library.active;
+  state.library.active = id;
+  const profile = activeProfile();
+  state.attempted.delete(canon(profile.preset));
+  state.selected = 0;
+  loadActive();
+  api('/api/profiles/activate', {id}).catch(error => {
+    toast(error.message, 'error');
+    if (!state.library.profiles.some(p => p.id === id)) { state.library.active = previous; loadActive(); }
+  });
+}
+
+async function createProfile(name, preset) {
+  await flushSave();
+  const result = await api('/api/profiles/save', {name: uniqueName(name), preset, activate: true});
+  adoptLibrary(result);
+  state.selected = 0;
+  loadActive();
+  return result.saved;
+}
+
+/* ---------- editing ---------- */
+function changed({compile = true, rows = false} = {}) {
+  if (rows) renderRows(); else renderRowState();
+  renderGraph(); renderEditorState(); renderDevice(); renderProfiles();
+  scheduleSave();
+  if (compile) compileSoon();
+}
+
+function commit() {
+  const now = JSON.stringify(state.preset);
+  if (now === state.committed) return;
+  const history = historyFor(state.library.active);
+  history.undo.push(state.committed);
+  if (history.undo.length > 100) history.undo.shift();
+  history.redo = [];
+  state.committed = now;
+  renderEditorState();
+}
+
+function step(direction) {
+  commit();
+  const history = historyFor(state.library.active);
+  const from = direction < 0 ? history.undo : history.redo, to = direction < 0 ? history.redo : history.undo;
+  if (!from.length) return;
+  to.push(state.committed);
+  state.committed = from.pop();
+  state.preset = JSON.parse(state.committed);
+  state.selected = Math.min(state.selected, state.preset.filters.length - 1);
+  changed({rows: true});
+}
+
+function setFilter(index, values) {
+  Object.assign(state.preset.filters[index], values);
+}
+
+function freeFrequency() {
+  const used = state.preset.filters.map(f => Math.log10(Math.min(20000, Math.max(20, f.frequency || 1000)))).sort((a, b) => a - b);
+  const points = [Math.log10(20), ...used, Math.log10(20000)];
+  let best = [0, Math.log10(1000)];
+  for (let i = 1; i < points.length; i++) {
+    const gap = points[i] - points[i - 1];
+    if (gap > best[0]) best = [gap, (points[i] + points[i - 1]) / 2];
+  }
+  const f = 10 ** best[1];
+  return f < 1000 ? Math.round(f) : Math.round(f / 10) * 10;
+}
+
+function addFilter(frequency = freeFrequency(), gain = 0) {
+  if (state.preset.filters.length >= MAX_FILTERS) { toast('The Maxwell holds 10 filters. Remove one first.', 'warn'); return; }
+  commit();
+  state.preset.filters.push({type: 'peak', frequency, gain, q: 1, enabled: true});
+  state.selected = state.preset.filters.length - 1;
+  changed({rows: true}); commit();
+}
+
+function removeFilter(index) {
+  if (state.preset.filters.length <= 1) return;
+  commit();
+  state.preset.filters.splice(index, 1);
+  state.selected = Math.min(state.selected, state.preset.filters.length - 1);
+  changed({rows: true}); commit();
+}
+
+function select(index, {scroll = false} = {}) {
+  if (index === state.selected) return;
+  state.selected = index;
+  renderRowState(); renderGraph();
+  if (scroll) $('filter-rows').children[index]?.scrollIntoView({block: 'nearest'});
+}
+
+/* ---------- filter table ---------- */
+function numberCell(index, field, unit, {min, max, stepValue}) {
+  const cell = document.createElement('td');
+  const wrap = document.createElement('span'); wrap.className = 'unit-input';
+  const input = document.createElement('input');
+  Object.assign(input, {type: 'number', min, max, step: 'any', inputMode: 'decimal'});
+  input.dataset.field = field; input.dataset.step = stepValue;
+  input.setAttribute('aria-label', `${{frequency: 'Frequency', gain: 'Gain', q: 'Q'}[field]}, filter ${index + 1}`);
+  input.addEventListener('input', () => {
+    setFilter(index, {[field]: input.value === '' ? null : Number(input.value)});
+    changed();
+  });
+  input.addEventListener('change', commit);
+  wrap.append(input);
+  if (unit) { const label = document.createElement('span'); label.textContent = unit; wrap.append(label); }
+  cell.append(wrap);
+  return cell;
+}
+
+function fixedCell(text, title) {
+  const cell = document.createElement('td');
+  const value = document.createElement('span'); value.className = 'fixed-value'; value.textContent = text; value.title = title;
+  cell.append(value);
+  return cell;
+}
+
+function renderRows() {
+  const body = $('filter-rows');
+  body.replaceChildren();
+  state.preset.filters.forEach((f, index) => {
+    const row = document.createElement('tr');
+    row.dataset.index = index;
+    row.addEventListener('focusin', () => select(index));
+    row.addEventListener('pointerdown', () => select(index));
+
+    const on = document.createElement('td'); on.className = 'col-on';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.className = 'row-toggle';
+    toggle.checked = f.enabled; toggle.setAttribute('aria-label', `Filter ${index + 1} on`);
+    toggle.addEventListener('change', () => { setFilter(index, {enabled: toggle.checked}); changed(); commit(); });
+    on.append(toggle);
+
+    const number = document.createElement('td'); number.className = 'col-num'; number.textContent = index + 1;
+
+    const typeCell = document.createElement('td');
+    const type = document.createElement('select'); type.setAttribute('aria-label', `Type, filter ${index + 1}`);
+    for (const [value, text] of Object.entries(TYPES)) type.append(new Option(text, value));
+    type.value = f.type;
+    type.addEventListener('change', () => {
+      const next = type.value, current = state.preset.filters[index];
+      const values = {type: next};
+      if (isPass(next)) values.gain = 0;
+      else if (isPass(current.type)) values.gain = 0;
+      if (isShelf(next)) values.q = SHELF_Q;
+      else if (isShelf(current.type)) values.q = isPass(next) ? SHELF_Q : 1;
+      setFilter(index, values);
+      changed({rows: true}); commit();
+      $('filter-rows').children[index]?.querySelector('select').focus();
+    });
+    typeCell.append(type);
+
+    row.append(on, number, typeCell, numberCell(index, 'frequency', 'Hz', {min: 20, max: 20000, stepValue: 1}));
+    row.append(isPass(f.type) ? fixedCell('—', 'Pass filters have no gain.') : numberCell(index, 'gain', 'dB', {min: -12, max: 12, stepValue: 0.1}));
+    row.append(isShelf(f.type) ? fixedCell('S = 1', 'Shelf slope is fixed, so Q does not apply.') : numberCell(index, 'q', '', {min: 0.1, max: 20, stepValue: 0.01}));
+
+    const removeCell = document.createElement('td'); removeCell.className = 'col-remove';
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'icon-button'; remove.setAttribute('aria-label', `Remove filter ${index + 1}`);
+    remove.innerHTML = '<svg><use href="#i-close"/></svg>';
+    remove.addEventListener('click', () => removeFilter(index));
+    removeCell.append(remove);
+    row.append(removeCell);
+    body.append(row);
+  });
+  renderRowState({values: true});
+}
+
+function renderRowState({values = false} = {}) {
+  const issues = problems();
+  const rows = $('filter-rows').children;
+  state.preset.filters.forEach((f, index) => {
+    const row = rows[index]; if (!row) return;
+    row.classList.toggle('selected', index === state.selected);
+    row.classList.toggle('off', !f.enabled);
+    row.querySelector('.col-remove button').disabled = state.preset.filters.length <= 1;
+    for (const input of row.querySelectorAll('input[data-field]')) {
+      const field = input.dataset.field;
+      if (values || document.activeElement !== input) {
+        const value = f[field];
+        const text = value === null || value === undefined ? '' : String(field === 'q' ? round(value, 3) : round(value, field === 'gain' ? 2 : 1));
+        if (input.value !== text) input.value = text;
+      }
+      input.setAttribute('aria-invalid', issues.some(p => p.index === index && p.field === field) ? 'true' : 'false');
+    }
+  });
+}
+
+/* ---------- graph ---------- */
+let graph;
+function compiledPoints() {
+  const compiled = state.compiled;
+  if (!compiled || compiled.signature !== signature()) return null;
+  const curve = compiled.result.curves.find(c => c.rate === 48000) || compiled.result.curves[0];
+  return curve ? curve.points.map(([f, db]) => [f, db - compiled.result.preamp]) : null;
+}
+
+function renderGraph() {
+  const issues = problems();
+  graph.render({filters: payload().filters, selected: state.selected, compiled: compiledPoints(),
+    invalid: issues.length > 0 || (!!state.compileError && state.compileError.signature === signature())});
+}
+
+/* ---------- compile ---------- */
+let compileTimer = null;
+function compileSoon(delay = 300) {
+  clearTimeout(compileTimer);
+  compileTimer = setTimeout(compileNow, delay);
+}
+
+function compileNow() {
+  clearTimeout(compileTimer);
+  const sig = signature();
+  if (problems().length) { renderEditorState(); return Promise.resolve(null); }
+  if (state.compiled?.signature === sig) { maybeAutoApply(); return Promise.resolve(state.compiled); }
+  const request = payload();
+  return queue(async () => {
+    if (signature() !== sig) return null;
+    try {
+      const result = await api('/api/compile', request);
+      state.compiled = {signature: sig, result};
+      if (state.compileError?.signature === sig) state.compileError = null;
+    } catch (error) {
+      state.compileError = {signature: sig, message: error.message};
+    }
+    if (signature() === sig) { renderGraph(); renderEditorState(); renderDevice(); maybeAutoApply(); }
+    return state.compiled?.signature === sig ? state.compiled : null;
+  });
+}
+
+/* ---------- device ---------- */
+const status = () => state.status || {};
+function deviceReady() {
+  const s = status();
+  return !!(s.live_enabled && s.backup_exists && !s.audeze_running && !state.transportDirty
+    && s.live_state !== 'uncertain' && s.storage_state !== 'uncertain');
+}
+const liveSignature = () => status().live_state === 'applied' ? canon(status().last_profile) : null;
+const savedSignature = () => status().storage_state === 'saved' ? canon(status().saved_profile) : null;
+
+function maybeAutoApply() {
+  const sig = signature();
+  if (!$('auto-apply').checked || !deviceReady() || state.busy || state.compiled?.signature !== sig) return;
+  if (liveSignature() === sig || state.attempted.has(sig)) return;
+  state.attempted.add(sig);
+  deviceOp('apply', {quiet: true});
+}
+
+const DEVICE_OPS = {
+  connect: {path: '/api/read_device', label: 'Reading…'},
+  apply: {path: '/api/apply', label: 'Applying…'},
+  save: {path: '/api/save', label: 'Saving…'},
+  restore: {path: '/api/restore', label: 'Restoring…'},
+  restoreSaved: {path: '/api/restore_saved', label: 'Restoring…'},
+};
+
+async function deviceOp(kind, {quiet = false} = {}) {
+  const op = DEVICE_OPS[kind];
+  const sends = kind === 'apply' || kind === 'save';
+  let request = {};
+  if (sends) {
+    const ready = await compileNow();
+    if (!ready) { if (!quiet) toast(state.compileError?.message || 'Fix the highlighted filters first.', 'error'); return; }
+    request = payload();
+    if (canon(request) !== ready.signature) return;
+  } else if (kind === 'connect') request = {transport: $('transport').value};
+  return queue(async () => {
+    if (sends && canon(request) !== signature()) return;
+    state.busy = kind; renderDevice();
+    try {
+      const result = await api(op.path, request);
+      if (kind === 'connect') {
+        state.transportDirty = false;
+        toast(result.message, result.backup_exists ? 'success' : 'warn');
+      } else if (!quiet) toast(result.message, 'success');
+      if (kind === 'restore' || kind === 'restoreSaved') state.attempted.add(signature());
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      state.busy = null;
+      await refreshStatus().catch(() => {});
+    }
+    if (kind === 'connect') maybeAutoApply();
+  });
+}
+
+function deviceView() {
+  const s = status(), sig = signature();
+  if (!state.status) return {tone: 'idle', line: 'Connecting to the editor…', detail: ''};
+  if (!s.live_enabled) return {tone: 'idle', line: 'Offline', detail: 'Started with --offline. Edits are previewed, never sent to the headset.'};
+  if (s.audeze_running) return {tone: 'warn', line: 'Paused: Audeze App/HQ is open',
+    detail: 'Custom PEQ will not work while it is open. Close it to use the headset.', audeze: true};
+  if (s.storage_state === 'uncertain') return {tone: 'error', line: 'The last save was not confirmed',
+    detail: 'Open Restore and choose Restore saved preset before sending more EQ.'};
+  if (s.live_state === 'uncertain') return {tone: 'error', line: 'The last change was not confirmed',
+    detail: 'Open Restore and choose Restore live EQ before sending more EQ.'};
+  if (state.transportDirty) return {tone: 'idle', line: 'Connection changed', detail: 'Read the headset again through this connection before sending EQ.'};
+  if (!s.backup_exists) return {tone: 'idle', line: 'Headset not read yet',
+    detail: 'Connect & back up saves your current custom preset so it can always be restored.'};
+  const live = liveSignature(), saved = savedSignature();
+  const device = s.device || 'Original Maxwell';
+  if (live === sig) return {tone: 'ok', line: device, detail: saved === sig ? 'Playing this profile. It is also saved on the headset.' : 'Playing this profile live. Headset storage is unchanged.'};
+  if (s.live_state === 'applied') {
+    const playing = state.library.profiles.find(p => canon(p.preset) === live);
+    return {tone: 'ok', line: device, detail: playing ? `Playing “${playing.name}”. This profile differs.` : 'Playing an earlier version of this profile.'};
+  }
+  if (s.storage_state === 'saved') return {tone: 'ok', line: device, detail: 'Headset is playing its saved custom preset.'};
+  return {tone: 'ok', line: device, detail: 'Headset is playing your original preset. Backup ready.'};
+}
+
+function renderDevice() {
+  const s = status(), view = deviceView(), sig = signature();
+  $('status-dot').dataset.tone = view.tone;
+  $('device-line').textContent = view.line;
+  $('device-detail').textContent = view.detail;
+  const live = !!s.live_enabled, busy = !!state.busy, readable = s.storage_state !== 'uncertain';
+  const blocked = !live || s.audeze_running;
+  const current = state.compiled?.signature === sig && !problems().length;
+  const uncertain = s.live_state === 'uncertain' || s.storage_state === 'uncertain';
+
+  $('transport').disabled = busy || blocked || !readable;
+  if (!state.transportDirty && s.transport) $('transport').value = s.transport;
+  $('connect').hidden = !live;
+  $('connect').disabled = busy || blocked || !readable;
+  $('connect').textContent = state.busy === 'connect' ? DEVICE_OPS.connect.label : s.backup_exists && !state.transportDirty ? 'Read again' : 'Connect & back up';
+  $('connect').classList.toggle('primary', !s.backup_exists || state.transportDirty);
+  $('connect').title = readable ? '' : 'Restore the saved preset through this connection before switching.';
+  for (const id of ['apply', 'save-headset', 'restore-menu-button']) $(id).hidden = !live;
+  $('apply').disabled = busy || !deviceReady() || !current || liveSignature() === sig;
+  $('apply').textContent = state.busy === 'apply' ? DEVICE_OPS.apply.label : 'Apply';
+  $('apply').hidden = !live || $('auto-apply').checked;
+  $('save-headset').disabled = busy || !deviceReady() || !current || savedSignature() === sig;
+  $('save-headset').textContent = state.busy === 'save' ? DEVICE_OPS.save.label : 'Save to headset…';
+  const canRestore = !busy && live && !s.audeze_running && s.backup_exists && !state.transportDirty;
+  $('restore-live').disabled = !canRestore || s.storage_state === 'uncertain' || (s.live_state === 'unchanged' && !uncertain);
+  $('restore-saved').disabled = !canRestore || s.storage_state === 'unchanged';
+  $('restore-menu-button').disabled = $('restore-live').disabled && $('restore-saved').disabled;
+  $('restore-menu-button').classList.toggle('attention', uncertain);
+  $('auto-apply').closest('.switch').hidden = !live;
+
+  const showBanner = !!s.audeze_running && !state.audezeDismissed && live;
+  $('audeze-banner').hidden = !showBanner;
+  $('show-audeze').hidden = !(view.audeze && state.audezeDismissed);
+  $('open-balance').hidden = !live;
+  renderBalance();
+}
+
+/* ---------- balance ---------- */
+// Firmware gain steps, not dB. Writes go straight to headset storage.
+const BALANCE_MAX = 150, BALANCE_RESERVED = [136, 142];
+const SOURCE_LABEL = {'usb-c': 'USB-C', wireless: 'wireless'};
+const lastBalance = () => status().balance || null;
+const balanceValue = side => { const raw = $(`balance-${side}`).value.trim(); return raw === '' ? NaN : Number(raw); };
+
+function balanceIssue(value) {
+  if (!Number.isInteger(value)) return 'Enter whole numbers.';
+  if (value < 0 || value > BALANCE_MAX) return `Keep both channels between 0 and ${BALANCE_MAX}.`;
+  if (BALANCE_RESERVED.includes(value)) return `${value} is reserved by the firmware. Pick a nearby value.`;
+  return '';
+}
+
+function setBalanceInputs(values) {
+  $('balance-left').value = values.left; $('balance-right').value = values.right;
+}
+
+function stepBalance(side, delta) {
+  let value = balanceValue(side);
+  if (!Number.isInteger(value)) value = lastBalance()?.[side] ?? 0;
+  do value += delta; while (BALANCE_RESERVED.includes(value));
+  $(`balance-${side}`).value = Math.min(BALANCE_MAX, Math.max(0, value));
+  renderBalance();
+}
+
+function renderBalance() {
+  if (!$('balance-dialog').open) return;
+  const s = status(), last = lastBalance(), busy = !!state.busy, mine = state.busy === 'balance';
+  const blocked = !s.live_enabled || s.audeze_running;
+  const left = balanceValue('left'), right = balanceValue('right');
+  const issue = last ? balanceIssue(left) || balanceIssue(right) : '';
+  const changed = !!last && (left !== last.left || right !== last.right);
+
+  for (const id of ['balance-left', 'balance-right']) {
+    $(id).disabled = !last || busy || blocked;
+    $(id).setAttribute('aria-invalid', String(!!balanceIssue(balanceValue(id.slice(8))) && !!last));
+  }
+  for (const button of $('balance-dialog').querySelectorAll('[data-step]')) button.disabled = !last || busy || blocked;
+  $('balance-error').hidden = !issue; $('balance-error').textContent = issue;
+
+  let diff = 'Not read yet';
+  if (s.audeze_running) diff = 'Close Audeze App/HQ first';
+  else if (last && !issue) {
+    const d = right - left;
+    diff = d === 0 ? 'Even' : `${d > 0 ? 'Right' : 'Left'} ${Math.abs(d)} step${Math.abs(d) === 1 ? '' : 's'} louder`;
+    if (changed) diff += ' · not applied';
+  } else if (last) diff = '—';
+  $('balance-diff').textContent = diff;
+
+  $('balance-read').disabled = busy || blocked;
+  $('balance-read').textContent = mine && state.balanceAction === 'read' ? 'Reading…' : last ? 'Read again' : 'Read headset';
+  $('balance-apply').disabled = busy || blocked || !changed || !!issue;
+  $('balance-apply').textContent = mine && state.balanceAction === 'apply' ? 'Applying…' : 'Apply balance';
+  const first = state.balanceFirst;
+  $('balance-revert').hidden = !first || !last || (first.left === last.left && first.right === last.right);
+  if (first) $('balance-revert').textContent = `Put back ${first.left} / ${first.right}`;
+  $('balance-revert').disabled = busy || blocked;
+
+  const message = state.balanceMessage;
+  $('balance-status').textContent = message?.text || '';
+  $('balance-status').dataset.kind = message?.kind || '';
+
+  const profile = last?.source_profile;
+  $('balance-source-line').textContent = profile ? (profile === 'usb-c' ? 'USB-C' : 'Wireless') : 'Read the headset to see it.';
+  const target = profile === 'usb-c' ? 'wireless' : 'usb-c';
+  $('balance-source-switch').hidden = !profile;
+  $('balance-source-switch').disabled = busy || blocked;
+  $('balance-source-switch').textContent = mine && state.balanceAction === 'source' ? 'Switching…' : `Switch to ${SOURCE_LABEL[target]}…`;
+  $('balance-persist').textContent = !profile ? ''
+    : profile === 'usb-c'
+      ? 'An applied balance is saved on the headset and loads at every power-on. A factory reset or a fully drained battery clears it.'
+      : 'On this profile the headset loads its stored wireless balance at power-on, so an applied balance may only last until the headset turns off. On the USB-C profile it loads at power-on.';
+}
+
+function openBalance() {
+  const last = lastBalance();
+  if (last) setBalanceInputs(last);
+  state.balanceMessage = null;
+  $('balance-dialog').showModal();
+  renderBalance();
+  if (!last && !$('balance-read').disabled) balanceOp('read');
+}
+
+// Results stay inside the dialog: toasts sit under its backdrop.
+async function balanceOp(action, body = {}) {
+  const path = {read: '/api/balance/read', apply: '/api/balance/apply', source: '/api/balance/source'}[action];
+  // Writes go through the connection the balance was read through.
+  const request = action === 'read' ? {transport: $('transport').value} : body;
+  return queue(async () => {
+    state.busy = 'balance'; state.balanceAction = action; state.balanceMessage = null; renderDevice();
+    try {
+      const result = await api(path, request);
+      state.balanceFirst ??= result.previous ? {left: result.previous.left, right: result.previous.right} : {left: result.left, right: result.right};
+      setBalanceInputs(result);
+      state.balanceMessage = {text: result.message, kind: 'success'};
+    } catch (error) {
+      state.balanceMessage = {text: error.message, kind: 'error'};
+    } finally {
+      state.busy = null; state.balanceAction = null;
+      await refreshStatus().catch(() => {});
+      renderDevice();
+    }
+  });
+}
+
+async function switchSource() {
+  const target = lastBalance()?.source_profile === 'usb-c' ? 'wireless' : 'usb-c', label = SOURCE_LABEL[target];
+  const ok = await confirmDialog({
+    title: `Switch the source profile to ${label}?`,
+    body: 'The headset reads this once at power-on, so turn it off and on again afterwards. It picks which stored balance loads at power-on, and the firmware keeps separate defaults for each profile. It stays set until you change it here; a factory reset does not change it.',
+    ok: `Switch to ${label}`,
+  });
+  if (ok) balanceOp('source', {source: target});
+}
+
+let statusTimer = null;
 async function refreshStatus() {
   const result = await api('/api/status');
+  const wasRunning = state.status?.audeze_running, encoder = state.status?.encoder;
   state.status = result; state.token = result.token;
-  const storage = result.storage_state || 'unchanged';
-  if (!state.transportDirty) {
-    $('transport').value = result.transport || 'usb';
-    state.transportDirty = false;
+  if (wasRunning && !result.audeze_running) state.audezeDismissed = false;
+  if (result.session_recovered && !state.recoveryShown && (result.live_state !== 'unchanged' || result.storage_state !== 'unchanged')) {
+    state.recoveryShown = true;
+    toast('Recovered the last session. Your original preset backup is still available under Restore.', 'info');
   }
-  $('session-recovery').hidden = !result.session_recovered;
-  const live = result.live_enabled && result.dll_available;
-  $('connection').textContent = live ? 'Device access enabled' : 'Offline editor';
-  $('connection').classList.toggle('ready', !!live);
-  const device = typeof result.device === 'string' ? result.device : result.device?.name;
-  $('device-state').textContent = !result.live_enabled
-    ? 'Device access is disabled. You can edit filters and compile a preview offline.'
-    : storage === 'uncertain' ? 'The saved preset could not be verified. Use Restore saved profile to recover the original preset before making more changes.'
-    : result.live_state === 'uncertain' ? 'The live EQ write was not confirmed. Use Restore live backup before applying again.'
-    : storage === 'saved' ? 'Custom EQ is saved on the headset. Your original backup is retained. Restore saved profile restores both the saved preset and live EQ.'
-    : result.live_state === 'applied' ? 'Temporary EQ is active. You can save it to the headset, or restore the live backup before reading another preset.'
-    : !result.dll_available ? 'The Audeze coefficient library is unavailable. Compilation is disabled; reading and restoring remain available.'
-    : `${device ? device + '. ' : 'Device access is enabled. '}${result.backup_exists ? 'A preset backup is available.' : 'Choose a custom preset in Audeze HQ, then read it to create a backup.'}`;
-  updateControls();
-}
-function svgElement(name, attrs, text) {
-  const node = document.createElementNS('http://www.w3.org/2000/svg', name);
-  Object.entries(attrs).forEach(([key, val]) => node.setAttribute(key, String(val)));
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-function plot(curves = []) {
-  const svg = $('response-plot'); svg.replaceChildren();
-  const width = Math.max(270, svg.clientWidth), height = width < 600 ? 220 : 280;
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  const left = 40, right = width - 23, top = 20, bottom = height - 36;
-  const points = curves.flatMap(c => c.points || []).filter(p => Number.isFinite(p[1]));
-  const values = points.map(p => p[1]);
-  const floor = -120;
-  const clipped = values.some(db => db < floor);
-  const yMin = Math.max(floor, Math.min(-12, Math.floor(Math.min(0, ...values) / 6) * 6));
-  const yMax = Math.max(6, Math.ceil(Math.max(0, ...values) / 6) * 6);
-  const x = f => left + Math.log10(f / 20) / 3 * (right - left);
-  const y = db => top + (yMax - db) / (yMax - yMin) * (bottom - top);
-  for (let db = yMin; db <= yMax; db += yMax - yMin > 60 ? 12 : 6) {
-    svg.append(svgElement('line', {x1: left, x2: right, y1: y(db), y2: y(db), stroke: db === 0 ? '#a5b7c3' : '#e5ebef', 'stroke-width': 1}));
-    svg.append(svgElement('text', {x: left - 12, y: y(db) + 4, 'text-anchor': 'end'}, `${db > 0 ? '+' : ''}${db}`));
+  if (state.preset) {
+    renderDevice(); renderProfiles(); maybeAutoApply();
+    if (encoder !== result.encoder) renderEditorState();
   }
-  for (const f of (width < 600 ? [20, 100, 1000, 10000, 20000] : [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000])) {
-    svg.append(svgElement('line', {x1: x(f), x2: x(f), y1: top, y2: bottom, stroke: '#edf0f2', 'stroke-width': 1}));
-    svg.append(svgElement('text', {x: x(f), y: height - 14, 'text-anchor': 'middle'}, f >= 1000 ? `${f / 1000}k` : f));
-  }
-  const defs = svgElement('defs', {}), clip = svgElement('clipPath', {id: 'plot-clip'});
-  clip.append(svgElement('rect', {x: left, y: top, width: right - left, height: bottom - top})); defs.append(clip); svg.append(defs);
-  curves.forEach((curve, index) => {
-    const valid = (curve.points || []).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= 20 && p[0] <= 20000);
-    const d = valid.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(2)},${y(p[1]).toFixed(2)}`).join(' ');
-    svg.append(svgElement('path', {d, fill: 'none', stroke: curveColors[index % curveColors.length], 'stroke-width': 2.2, 'stroke-linejoin': 'round', 'clip-path': 'url(#plot-clip)', ...(index ? {'stroke-dasharray': '7 4'} : {})}));
-  });
-  $('plot-empty').hidden = curves.length > 0;
-  $('plot-clipping').hidden = !clipped;
-  svg.setAttribute('aria-label', curves.length ? `Calculated frequency response of ${curves.length} sample-rate banks, including preamp. Not measured on the headset.` : 'Frequency response plot. Compile filters to show the calculated response.');
-  $('curve-legend').replaceChildren();
-  curves.forEach((curve, index) => {
-    const item = document.createElement('span'); item.className = 'legend-item';
-    const line = document.createElement('span'); line.className = 'legend-line'; line.style.background = curveColors[index % curveColors.length];
-    item.append(line, document.createTextNode(`${Number(curve.rate) / 1000} kHz`)); $('curve-legend').append(item);
-  });
-  if (!curves.length) $('curve-legend').textContent = '20 Hz–20 kHz · Logarithmic frequency';
+  return result;
 }
-async function action(work) {
-  setBusy(true); $('message').hidden = true;
-  try { await work(); } catch (error) { showMessage(error.message, true); await refreshStatus().catch(() => {}); }
-  finally { setBusy(false); }
-}
-$('editor').addEventListener('submit', event => {
-  event.preventDefault();
-  action(async () => {
-    const input = payload(); const result = await api('/api/compile', input);
-    state.compiled = result; state.signature = JSON.stringify(input);
-    plot(result.curves || []);
-    $('preamp-result').textContent = `${Number(result.preamp).toFixed(2)} dB`;
-    $('compile-summary').textContent = Number.isFinite(result.max_error_db) ? `Fit error ≤ ${result.max_error_db.toFixed(3)} dB` : 'Coefficients compiled';
-    if (result.experimental_filters) $('compile-summary').textContent += ' · Experimental filters';
-    $('details-content').textContent = JSON.stringify(result, null, 2);
-    showMessage('Preview compiled. Nothing has been sent to the headset.');
-  });
-});
-$('add').addEventListener('click', () => { if (state.filters.length < 10) { state.filters.push({type: 'peak', frequency: 1000, gain: 0, q: 1, enabled: true}); renderFilters(); changed(); } });
-$('preamp-mode').addEventListener('change', changed);
-$('preamp-value').addEventListener('input', changed);
-$('export').addEventListener('click', () => { if ($('editor').reportValidity()) download('maxwell-peq.json', payload()); });
-$('import').addEventListener('click', () => $('import-file').click());
-$('import-file').addEventListener('change', async event => {
-  const file = event.target.files[0]; if (!file) return;
-  try {
-    if (file.size > 100000) throw new Error('This file is too large. Import a filter JSON file under 100 KB.');
-    const data = JSON.parse(await file.text());
-    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('A preset must be a JSON object.');
-    if (!Array.isArray(data.filters) || data.filters.length < 1 || data.filters.length > 10) throw new Error('The JSON must contain a filters array with 1 to 10 filters.');
-    const filters = data.filters.map((f, i) => {
-      if (!f || typeof f !== 'object') throw new Error(`Filter ${i + 1} must be an object.`);
-      const type = f.type === undefined || f.type === 'PK' ? 'peak' : f.type;
-      if (typeof type !== 'string' || !Object.hasOwn(filterTypes, type)) throw new Error(`Filter ${i + 1}: unknown filter type.`);
-      const gain = f.gain === undefined && isPass(type) ? 0 : f.gain;
-      const q = f.q === undefined && (isShelf(type) || isPass(type)) ? shelfQ : f.q;
-      if (!Number.isFinite(f.frequency) || f.frequency < 20 || f.frequency > 20000 || !Number.isFinite(gain) || gain < -12 || gain > 12 || !Number.isFinite(q) || q < 0.1 || q > 20 || (f.enabled !== undefined && typeof f.enabled !== 'boolean')) throw new Error(`Filter ${i + 1} is invalid. Use 20–20000 Hz, −12 to +12 dB, and Q 0.1–20.`);
-      if (isPass(type) && gain !== 0) throw new Error(`Filter ${i + 1}: pass filters require gain 0.`);
-      if (isShelf(type) && Math.abs(q - shelfQ) > 0.00001) throw new Error(`Filter ${i + 1}: shelves use fixed slope S = 1. Omit Q or set it to 0.7071.`);
-      return {type, frequency: f.frequency, gain, q: isShelf(type) ? shelfQ : q, enabled: f.enabled !== false};
+function pollStatus() {
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(async () => {
+    if (!document.hidden) await refreshStatus().catch(() => {
+      $('status-dot').dataset.tone = 'error';
+      $('device-line').textContent = 'Lost contact with the editor';
+      $('device-detail').textContent = 'Restart Maxwell PEQ.';
     });
-    const preamp = data.preamp === undefined ? 'auto' : data.preamp;
-    if (preamp !== 'auto' && (!Number.isFinite(preamp) || preamp > 0 || preamp < -60)) throw new Error('Preamp must be "auto" or a number between −60 and 0 dB.');
-    state.filters = filters; $('preamp-mode').value = preamp === 'auto' ? 'auto' : 'manual'; $('preamp-value').value = preamp === 'auto' ? 0 : preamp;
-    renderFilters(); changed(); showMessage('Filters imported. Compile a preview to check them.');
-  } catch (error) { showMessage(error.message, true); }
-  event.target.value = '';
-});
-$('download-compiled').addEventListener('click', () => { if (isCurrent()) download('maxwell-peq-compiled.json', state.compiled); });
-$('transport').addEventListener('change', () => {
-  state.transportDirty = true;
-  updateControls();
-  showMessage('Click Connect / verify to check this connection and retain your original backup.');
-});
-for (const [id, endpoint, message] of [
-  ['connect', '/api/connect', 'Connection verified. Original backup retained.'],
-  ['read-device', '/api/read_device', 'Current preset read and backed up.'],
-  ['apply', '/api/apply', 'Temporary EQ sent. Listen at low volume to check the result.'],
-  ['save', '/api/save', 'Custom EQ saved, verified, and applied. The original backup is retained.'],
-  ['restore', '/api/restore', 'Original backup applied to live EQ.'],
-  ['restore-saved', '/api/restore_saved', 'Original saved preset and live EQ restored.']
-]) {
-  $(id).addEventListener('click', () => action(async () => {
-    const sendsFilters = id === 'apply' || id === 'save';
-    if (sendsFilters && (!$('editor').reportValidity() || !isCurrent())) throw new Error('Compile the current filters before applying or saving.');
-    const result = await api(endpoint, sendsFilters ? payload() : (id === 'read-device' || id === 'connect') ? {transport: $('transport').value} : {});
-    if (id === 'read-device' || id === 'connect') state.transportDirty = false;
-    $('details-content').textContent = JSON.stringify(result, null, 2);
-    showMessage(result.message || (id === 'read-device' && result.backup_exists === false ? 'Preset read. Choose a custom preset in Audeze HQ, then read again to create a backup.' : message));
-    await refreshStatus();
-  }));
+    pollStatus();
+  }, 2500);
 }
-const draftKey = 'maxwell-peq-editor-v1';
-state.profiles = [];
-state.loadedProfile = null;
-state.libraryReady = false;
-state.draftReady = false;
 
-function updateProfileControls() {
-  const selected = state.profiles?.find(p => p.id === $('profile-list').value);
-  const loaded = state.loadedProfile;
-  const available = !state.busy && !!state.token && state.libraryReady;
-  $('profile-list').disabled = !available;
-  $('profile-name').disabled = state.busy;
-  $('profile-load').disabled = !available || !selected;
-  $('profile-create').disabled = !available || !$('profile-name').value.trim();
-  for (const id of ['profile-update', 'profile-rename', 'profile-delete']) {
-    $(id).disabled = !available || !loaded || loaded.id !== selected?.id;
+/* ---------- rendering ---------- */
+function renderProfiles() {
+  const live = liveSignature(), saved = savedSignature();
+  const rows = state.library.profiles.map((p, i) => {
+    const sig = p.id === state.library.active ? signature() : canon(p.preset);
+    return {p, i, live: !!live && sig === live, saved: !!saved && sig === saved};
+  });
+  const key = JSON.stringify([state.library.active, rows.map(r => [r.p.id, r.p.name, r.live, r.saved])]);
+  if (key === state.profileKey) return;
+  state.profileKey = key;
+  const list = $('profile-list');
+  const focused = document.activeElement?.closest?.('.profile-item')?.dataset.id;
+  list.replaceChildren();
+  for (const {p, i, live: isLive, saved: isSaved} of rows) {
+    const item = document.createElement('li');
+    item.className = 'profile-item'; item.dataset.id = p.id;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'profile-button';
+    if (p.id === state.library.active) button.setAttribute('aria-current', 'true');
+    const name = document.createElement('span'); name.className = 'profile-label'; name.textContent = p.name;
+    button.append(name);
+    if (isLive) { const badge = document.createElement('span'); badge.className = 'badge live'; badge.textContent = 'Live'; button.append(badge); }
+    if (isSaved) { const badge = document.createElement('span'); badge.className = 'badge saved'; badge.textContent = 'Saved'; button.append(badge); }
+    if (i < 9) { const key = document.createElement('kbd'); key.textContent = `Ctrl+${i + 1}`; key.setAttribute('aria-hidden', 'true'); button.append(key); }
+    button.addEventListener('click', () => activate(p.id));
+    const more = document.createElement('button');
+    more.type = 'button'; more.className = 'icon-button more';
+    more.setAttribute('aria-label', `More actions for ${p.name}`); more.setAttribute('aria-haspopup', 'menu');
+    more.innerHTML = '<svg><use href="#i-more"/></svg>';
+    more.addEventListener('click', event => { event.stopPropagation(); openProfileMenu(p.id, more); });
+    item.append(button, more);
+    list.append(item);
   }
-  const modified = loaded && (JSON.stringify(payload()) !== JSON.stringify(loaded.preset) || $('profile-name').value.trim() !== loaded.name);
-  $('profile-state').textContent = loaded
-    ? `${loaded.name}${modified ? ' · Unsaved changes' : ' · Saved locally'}. Loading and saving local profiles does not change headset EQ.`
-    : 'Profiles stay on this computer. Loading a profile changes only the editor.';
+  if (focused) list.querySelector(`[data-id="${CSS.escape(focused)}"] .profile-button`)?.focus();
 }
 
-function saveDraft() {
-  if (!state.draftReady) return;
+function renderEditorState() {
+  const history = historyFor(state.library.active);
+  const pending = JSON.stringify(state.preset) !== state.committed;
+  $('undo').disabled = !history.undo.length && !pending;
+  $('redo').disabled = !history.redo.length || pending;
+  const count = state.preset.filters.length;
+  $('filter-count').textContent = `${count} of ${MAX_FILTERS}`;
+  $('add-filter').disabled = count >= MAX_FILTERS;
+
+  const manual = state.preset.preamp !== 'auto';
+  $('preamp-mode').value = manual ? 'manual' : 'auto';
+  $('preamp-manual').hidden = !manual;
+  if (manual && document.activeElement !== $('preamp-value')) $('preamp-value').value = state.preset.preamp ?? '';
+  $('preamp-value').setAttribute('aria-invalid', problems().some(p => p.field === 'preamp') ? 'true' : 'false');
+
+  const sig = signature(), compiled = state.compiled?.signature === sig ? state.compiled.result : null;
+  const error = state.compileError?.signature === sig ? state.compileError.message : null;
+  const issues = problems();
+  $('preamp-result').textContent = compiled ? `${manual ? 'Using' : 'Auto'} ${minus(compiled.preamp.toFixed(1))} dB` : '';
+
+  const note = $('type-note');
+  const text = issues.length ? issues.map(p => p.text).join(' ') : error;
+  note.classList.toggle('error', !!text);
+  if (text) note.textContent = text;
+  else if (state.preset.filters.some(f => f.enabled && f.type !== 'peak'))
+    note.textContent = 'Shelf and pass filters are experimental. Shelves use a fixed slope (S = 1), so Q does not apply.';
+  else if (status().encoder === 'built-in')
+    note.textContent = status().dll_available
+      ? 'Using the built-in encoder (MAXWELL_PEQ_ENCODER=built-in). It has not been compared with the Audeze library by ear yet.'
+      : 'Using the built-in encoder because the Audeze PEQ library is not installed. It has not been compared with the Audeze library by ear yet.';
+  else note.textContent = '';
+
+  $('graph-source').textContent = issues.length ? 'Estimated response · fix the highlighted values'
+    : error ? 'Estimated response · could not compile'
+    : compiled ? `Compiled 48 kHz response, before preamp · fit error ≤ ${compiled.max_error_db.toFixed(3)} dB · not measured`
+    : 'Estimated response · compiling…';
+}
+
+function renderAll() {
+  renderRows(); renderGraph(); renderEditorState(); renderProfiles(); renderDevice();
+}
+
+/* ---------- menus and dialogs ---------- */
+function closeMenus() {
+  for (const menu of document.querySelectorAll('.menu')) menu.hidden = true;
+  $('restore-menu-button').setAttribute('aria-expanded', 'false');
+}
+
+function openMenu(menu, anchor) {
+  closeMenus();
+  menu.hidden = false;
+  if (menu.id === 'profile-menu') {
+    const rect = anchor.getBoundingClientRect();
+    const top = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+    menu.style.left = `${Math.round(rect.left)}px`; menu.style.top = `${Math.round(top)}px`;
+  }
+  menu.querySelector('button:not(:disabled)')?.focus();
+}
+
+function menuKeys(event) {
+  const items = [...event.currentTarget.querySelectorAll('button:not(:disabled)')];
+  const at = items.indexOf(document.activeElement);
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    items[(at + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  } else if (event.key === 'Escape') {
+    event.preventDefault(); const owner = state.menuOwner; closeMenus(); owner?.focus();
+  } else if (event.key === 'Tab') closeMenus();
+}
+
+function openProfileMenu(id, anchor) {
+  state.menuProfile = id; state.menuOwner = anchor;
+  $('profile-menu').querySelector('[data-action="delete"]').disabled = state.library.profiles.length <= 1;
+  openMenu($('profile-menu'), anchor);
+}
+
+function confirmDialog({title, body, ok, danger = false}) {
+  const dialog = $('confirm-dialog');
+  $('confirm-title').textContent = title;
+  $('confirm-body').textContent = body;
+  $('confirm-ok').textContent = ok;
+  $('confirm-ok').classList.toggle('danger', danger);
+  $('confirm-ok').classList.toggle('primary', !danger);
+  dialog.returnValue = 'cancel';
+  dialog.showModal();
+  $('confirm-ok').focus();
+  return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), {once: true}));
+}
+
+async function profileAction(action) {
+  const id = state.menuProfile, profile = state.library.profiles.find(p => p.id === id);
+  closeMenus();
+  if (!profile) return;
+  if (action === 'rename') {
+    await activate(id);
+    $('profile-name').focus(); $('profile-name').select();
+  } else if (action === 'duplicate') {
+    await flushSave();
+    const preset = id === state.library.active ? payload() : profile.preset;
+    createProfile(`${profile.name} copy`, preset).catch(error => toast(error.message, 'error'));
+  } else if (action === 'export') {
+    await exportApo(id === state.library.active ? payload() : profile.preset, profile.name, id === state.library.active);
+  } else if (action === 'delete') {
+    const ok = await confirmDialog({title: `Delete “${profile.name}”?`, body: 'The profile is removed from this computer. Anything already saved on the headset stays there.', ok: 'Delete', danger: true});
+    if (!ok) return;
+    await flushSave();
+    try {
+      const result = await api('/api/profiles/delete', {id});
+      state.history.delete(id);
+      const switching = result.active !== state.library.active;
+      adoptLibrary(result);
+      if (switching) loadActive(); else renderProfiles();
+      toast(`Deleted “${profile.name}”.`);
+    } catch (error) { toast(error.message, 'error'); }
+  }
+}
+
+/* ---------- APO import/export ---------- */
+const fileName = name => `${name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').trim() || 'preset'}.txt`;
+
+async function apoText(preset, useCompiledPreamp) {
+  const compiled = useCompiledPreamp && state.compiled?.signature === signature() ? state.compiled.result : null;
+  return (await api('/api/apo/export', {preset, preamp_db: compiled ? compiled.preamp : null})).text;
+}
+
+async function exportApo(preset = payload(), name = activeProfile().name, current = true) {
   try {
-    localStorage.setItem(draftKey, JSON.stringify({version: 1, filters: state.filters,
-      preampMode: $('preamp-mode').value, preampValue: $('preamp-value').value,
-      name: $('profile-name').value, loaded: state.loadedProfile}));
-    $('draft-state').textContent = 'Editor draft saved in this browser.';
-  } catch {
-    $('draft-state').textContent = 'Browser draft storage is unavailable. Save a local profile or export JSON to keep your edits.';
-  }
-}
-
-function restoreDraft() {
-  try {
-    const text = localStorage.getItem(draftKey);
-    if (!text) return false;
-    if (text.length > 65536) throw new Error('Draft too large');
-    const draft = JSON.parse(text);
-    const validNumber = x => x === null || (typeof x === 'number' && Number.isFinite(x));
-    if (draft.version !== 1 || !Array.isArray(draft.filters) || !draft.filters.length || draft.filters.length > 10
-        || !draft.filters.every(f => f && Object.hasOwn(filterTypes, f.type) && typeof f.enabled === 'boolean'
-          && ['frequency', 'gain', 'q'].every(k => validNumber(f[k])))
-        || !['auto', 'manual'].includes(draft.preampMode) || typeof draft.preampValue !== 'string'
-        || typeof draft.name !== 'string'
-        || (draft.loaded && (typeof draft.loaded.id !== 'string' || !Number.isInteger(draft.loaded.revision)
-          || typeof draft.loaded.name !== 'string' || !draft.loaded.preset))) throw new Error('Invalid draft');
-    state.filters = draft.filters;
-    state.loadedProfile = draft.loaded || null;
-    $('preamp-mode').value = draft.preampMode;
-    $('preamp-value').value = draft.preampValue;
-    $('profile-name').value = draft.name;
-    $('draft-state').textContent = 'Previous editor draft restored. Nothing was sent to the headset.';
-    return true;
-  } catch {
-    $('draft-state').textContent = 'The browser draft could not be restored. Load a local profile or import JSON.';
-    return false;
-  }
-}
-
-function populateProfiles(profiles) {
-  const selection = $('profile-list').value || state.loadedProfile?.id;
-  state.profiles = profiles;
-  $('profile-list').replaceChildren(new Option('Choose a profile', ''));
-  for (const profile of profiles) $('profile-list').add(new Option(profile.name, profile.id));
-  if (profiles.some(p => p.id === selection)) $('profile-list').value = selection;
-  state.libraryReady = true;
-  updateProfileControls();
-}
-
-function loadEditor(preset, profile = null) {
-  state.filters = preset.filters.map(f => ({...f, type: f.type || 'peak', enabled: f.enabled !== false,
-    q: f.q ?? shelfQ, gain: f.gain ?? 0}));
-  $('preamp-mode').value = preset.preamp === 'auto' || preset.preamp === undefined ? 'auto' : 'manual';
-  $('preamp-value').value = typeof preset.preamp === 'number' ? preset.preamp : 0;
-  state.loadedProfile = profile ? structuredClone(profile) : null;
-  $('profile-name').value = profile?.name || '';
-  state.compiled = null; state.signature = null;
-  renderFilters(); changed(); plot();
-  $('compile-summary').textContent = 'No coefficients compiled';
-}
-
-$('profile-name').addEventListener('input', () => { updateProfileControls(); saveDraft(); });
-$('profile-list').addEventListener('change', updateProfileControls);
-$('profile-load').addEventListener('click', () => action(async () => {
-  const selected = $('profile-list').value;
-  populateProfiles((await api('/api/profiles')).profiles);
-  const profile = state.profiles.find(p => p.id === selected);
-  if (!profile) throw new Error('This profile no longer exists. Choose another profile.');
-  loadEditor(profile.preset, profile);
-  showMessage(`Loaded ${profile.name} into the editor. Compile before applying.`);
-}));
-for (const [id, operation] of [['profile-create', 'save'], ['profile-update', 'save'], ['profile-rename', 'rename'], ['profile-delete', 'delete']]) {
-  $(id).addEventListener('click', () => action(async () => {
-    if (operation === 'save' && !$('editor').reportValidity()) return;
-    const loaded = state.loadedProfile;
-    if (operation === 'delete' && !confirm(`Delete local profile "${loaded.name}"? Your editor draft and headset EQ will remain.`)) return;
-    const request = {name: $('profile-name').value, ...(operation === 'save' ? {preset: payload()} : {}),
-      ...(id !== 'profile-create' ? {id: loaded.id, revision: loaded.revision} : {})};
-    let result;
-    try { result = await api(`/api/profiles/${operation}`, request); }
-    catch (error) {
-      // Refresh the choices, retaining the loaded revision and unsaved edits.
-      populateProfiles((await api('/api/profiles')).profiles);
-      throw error;
+    if (current) await compileNow();
+    const text = await apoText(preset, current);
+    if (tauri) {
+      const saved = await tauri.core.invoke('save_text', {filename: fileName(name), text});
+      if (saved) toast(`Exported to ${saved}`, 'success');
+      return;
     }
-    state.loadedProfile = result.profile;
-    populateProfiles(result.profiles);
-    $('profile-list').value = result.profile?.id || '';
-    if (result.profile) $('profile-name').value = result.profile.name;
-    saveDraft();
-    showMessage(operation === 'delete' ? 'Local profile deleted. Editor filters and headset EQ are unchanged.' : 'Profile saved on this computer. No EQ was sent.');
-  }));
+    const url = URL.createObjectURL(new Blob([text], {type: 'text/plain'}));
+    const link = document.createElement('a'); link.href = url; link.download = fileName(name); link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { toast(`Couldn't export: ${error.message}`, 'error'); }
 }
 
-const restoredDraft = restoreDraft();
-renderFilters(); plot();
-$('manual-preamp').hidden = $('preamp-mode').value !== 'manual';
-$('preamp-value').disabled = $('preamp-mode').value !== 'manual';
-$('preamp-value').required = $('preamp-mode').value === 'manual';
-state.draftReady = true;
-new ResizeObserver(() => plot(state.compiled?.curves || [])).observe($('response-plot').parentElement);
-refreshStatus().then(async () => {
-  if (!restoredDraft && !state.editorEdited && state.status.last_profile) {
-    loadEditor(state.status.last_profile);
-    $('draft-state').textContent = 'Last applied filters reopened. Nothing was sent to the headset.';
+async function copyApo() {
+  try {
+    await compileNow();
+    const text = await apoText(payload(), true);
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const area = Object.assign(document.createElement('textarea'), {value: text});
+      document.body.append(area); area.select(); document.execCommand('copy'); area.remove();
+    }
+    toast('Copied as Equalizer APO text.', 'success');
+  } catch (error) { toast(`Couldn't copy: ${error.message}`, 'error'); }
+}
+
+const importState = {parsed: null, timer: null, request: 0, nameEdited: false};
+
+function openImport(text = '', name = '') {
+  const dialog = $('import-dialog');
+  $('import-text').value = text;
+  $('import-file-name').textContent = name ? name : '';
+  importState.nameEdited = false;
+  $('import-name').value = uniqueName(name ? name.replace(/\.[^.]+$/, '') : 'Imported preset');
+  if (!dialog.open) dialog.showModal();
+  parseImport();
+  if (!text) $('import-text').focus();
+}
+
+function parseImport() {
+  clearTimeout(importState.timer);
+  const text = $('import-text').value;
+  const request = ++importState.request;
+  if (!text.trim()) {
+    importState.parsed = null; $('import-confirm').disabled = true;
+    $('import-result').innerHTML = '<p class="muted">Filters appear here as soon as the text can be read.</p>';
+    return;
   }
-  populateProfiles((await api('/api/profiles')).profiles);
-}).catch(error => { showMessage(error.message, true); updateControls(); });
+  importState.timer = setTimeout(async () => {
+    try {
+      const result = await api('/api/apo/parse', {text});
+      if (request !== importState.request) return;
+      importState.parsed = result;
+      renderImport(result);
+    } catch (error) {
+      if (request !== importState.request) return;
+      importState.parsed = null;
+      const message = document.createElement('p'); message.className = 'import-error'; message.textContent = error.message;
+      $('import-result').replaceChildren(message);
+    }
+    $('import-confirm').disabled = !importState.parsed?.filters?.length;
+  }, 200);
+}
+
+function renderImport(result) {
+  const box = $('import-result');
+  const table = document.createElement('table'); table.className = 'import-table';
+  table.innerHTML = '<thead><tr><th scope="col">#</th><th scope="col">Type</th><th scope="col">Frequency</th><th scope="col">Gain</th><th scope="col">Q</th></tr></thead>';
+  const body = document.createElement('tbody');
+  result.filters.forEach((f, i) => {
+    const row = document.createElement('tr');
+    if (f.enabled === false) row.className = 'off';
+    for (const text of [i + 1, TYPES[f.type] + (f.enabled === false ? ' (off)' : ''), fmtHz(f.frequency),
+      isPass(f.type) ? '—' : fmtDb(f.gain), isShelf(f.type) ? 'S = 1' : round(f.q, 3)]) {
+      const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
+    }
+    body.append(row);
+  });
+  table.append(body);
+  const summary = document.createElement('p'); summary.className = 'import-summary';
+  summary.textContent = `${result.filters.length} ${result.filters.length === 1 ? 'filter' : 'filters'} ready to import.`;
+  const parts = [summary, table];
+  if (result.warnings?.length) {
+    const list = document.createElement('ul'); list.className = 'import-warnings';
+    for (const warning of result.warnings) { const item = document.createElement('li'); item.textContent = warning; list.append(item); }
+    parts.push(list);
+  }
+  box.replaceChildren(...parts);
+}
+
+async function readFile(file) {
+  if (file.size > 200000) throw new Error('That file is too large for an Equalizer APO preset.');
+  return file.text();
+}
+
+async function confirmImport(event) {
+  event.preventDefault();
+  const parsed = importState.parsed; if (!parsed?.filters?.length) return;
+  const name = $('import-name').value.trim() || 'Imported preset';
+  $('import-confirm').disabled = true;
+  try {
+    await createProfile(name, {filters: parsed.filters, preamp: parsed.preamp ?? 'auto'});
+    $('import-dialog').close();
+    toast(`Added “${activeProfile().name}” with ${parsed.filters.length} ${parsed.filters.length === 1 ? 'filter' : 'filters'}.`, 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+    $('import-confirm').disabled = false;
+  }
+}
+
+/* ---------- wiring ---------- */
+function wire() {
+  graph = PEQGraph.create($('graph'), {
+    onSelect: (index, options) => select(index, options),
+    onDrag(index, change) {
+      setFilter(index, change);
+      if (state.selected !== index) state.selected = index;
+      changed({compile: false});
+    },
+    onCommit() { commit(); compileNow(); },
+    onRemove: removeFilter,
+    onAdd: (frequency, gain) => addFilter(frequency, gain),
+  });
+
+  $('add-filter').addEventListener('click', () => addFilter());
+  $('undo').addEventListener('click', () => step(-1));
+  $('redo').addEventListener('click', () => step(1));
+  $('preamp-mode').addEventListener('change', () => {
+    state.preset.preamp = $('preamp-mode').value === 'auto' ? 'auto'
+      : state.compiled?.signature === signature() ? Math.floor(state.compiled.result.preamp * 10) / 10 : -6;
+    changed(); commit();
+    if (state.preset.preamp !== 'auto') $('preamp-value').focus();
+  });
+  $('preamp-value').addEventListener('input', () => {
+    state.preset.preamp = $('preamp-value').value === '' ? null : Number($('preamp-value').value);
+    changed();
+  });
+  $('preamp-value').addEventListener('change', commit);
+
+  const name = $('profile-name');
+  name.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); name.blur(); }
+    if (event.key === 'Escape') { name.value = activeProfile().name; name.blur(); }
+  });
+  name.addEventListener('change', () => {
+    const profile = activeProfile(), value = name.value.trim();
+    if (!value || value === profile.name) { name.value = profile.name; return; }
+    profile.name = value; name.value = value;
+    state.profileKey = ''; renderProfiles();
+    persist(profile.id, {name: value});
+  });
+
+  $('new-profile').addEventListener('click', () => createProfile('New profile', flatPreset())
+    .then(() => { $('profile-name').focus(); $('profile-name').select(); })
+    .catch(error => toast(error.message, 'error')));
+
+  $('profile-menu').addEventListener('click', event => {
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (action) profileAction(action);
+  });
+  $('profile-menu').addEventListener('keydown', menuKeys);
+  $('restore-menu').addEventListener('keydown', menuKeys);
+  $('restore-menu-button').addEventListener('click', event => {
+    event.stopPropagation();
+    if (!$('restore-menu').hidden) { closeMenus(); return; }
+    state.menuOwner = $('restore-menu-button');
+    openMenu($('restore-menu'), $('restore-menu-button'));
+    $('restore-menu-button').setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', event => { if (!event.target.closest('.menu')) closeMenus(); });
+  window.addEventListener('blur', closeMenus);
+
+  $('auto-apply').addEventListener('change', () => {
+    localStorage.setItem('maxwell-peq.auto-apply', $('auto-apply').checked ? '1' : '0');
+    state.attempted.clear(); renderDevice(); maybeAutoApply();
+  });
+  $('auto-apply').checked = localStorage.getItem('maxwell-peq.auto-apply') !== '0';
+  $('transport').addEventListener('change', () => {
+    state.transportDirty = $('transport').value !== status().transport;
+    renderDevice();
+  });
+  $('connect').addEventListener('click', () => deviceOp('connect'));
+  $('apply').addEventListener('click', () => deviceOp('apply'));
+  $('save-headset').addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: `Save “${activeProfile().name}” to the headset?`,
+      body: 'This writes the EQ into the headset’s active custom preset and plays it. Your original preset stays backed up; Restore → Restore saved preset puts it back. Audeze HQ will still show its old slider values, and moving them there replaces this EQ.',
+      ok: 'Save to headset',
+    });
+    if (ok) deviceOp('save');
+  });
+  $('restore-live').addEventListener('click', () => { closeMenus(); deviceOp('restore'); });
+  $('restore-saved').addEventListener('click', async () => {
+    closeMenus();
+    const ok = await confirmDialog({title: 'Restore the saved preset?', body: 'This writes your original preset back into the headset’s custom preset slot and plays it.', ok: 'Restore saved preset'});
+    if (ok) deviceOp('restoreSaved');
+  });
+
+  $('close-audeze').addEventListener('click', async () => {
+    const button = $('close-audeze');
+    button.disabled = true; button.textContent = 'Closing…';
+    try {
+      await api('/api/close_audeze', {});
+      toast('Closed Audeze App/HQ.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+    finally {
+      button.disabled = false; button.textContent = 'Yes';
+      await refreshStatus().catch(() => {});
+    }
+  });
+  $('keep-audeze').addEventListener('click', () => { state.audezeDismissed = true; renderDevice(); $('show-audeze').focus(); });
+  $('show-audeze').addEventListener('click', () => { state.audezeDismissed = false; renderDevice(); $('close-audeze').focus(); });
+
+  $('copy-apo').addEventListener('click', copyApo);
+  $('export-apo').addEventListener('click', () => exportApo());
+
+  $('open-import').addEventListener('click', () => openImport());
+  $('import-text').addEventListener('input', () => { $('import-file-name').textContent = ''; parseImport(); });
+  $('import-name').addEventListener('input', () => { importState.nameEdited = true; });
+  $('import-choose').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', async event => {
+    const file = event.target.files[0]; event.target.value = '';
+    if (!file) return;
+    try {
+      $('import-text').value = await readFile(file);
+      $('import-file-name').textContent = file.name;
+      if (!importState.nameEdited) $('import-name').value = uniqueName(file.name.replace(/\.[^.]+$/, ''));
+      parseImport();
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  $('import-form').addEventListener('submit', confirmImport);
+  for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => button.closest('dialog').close());
+
+  $('open-balance').addEventListener('click', openBalance);
+  $('balance-read').addEventListener('click', () => balanceOp('read'));
+  $('balance-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if (!$('balance-apply').disabled) balanceOp('apply', {left: balanceValue('left'), right: balanceValue('right')});
+  });
+  $('balance-revert').addEventListener('click', () => {
+    const first = state.balanceFirst;
+    setBalanceInputs(first);
+    balanceOp('apply', {left: first.left, right: first.right});
+  });
+  $('balance-source-switch').addEventListener('click', switchSource);
+  for (const id of ['balance-left', 'balance-right']) $(id).addEventListener('input', renderBalance);
+  for (const button of $('balance-dialog').querySelectorAll('[data-step]')) {
+    const [side, delta] = button.dataset.step.split(':');
+    button.addEventListener('click', () => stepBalance(side, Number(delta)));
+  }
+
+  let dragDepth = 0;
+  const hasFiles = event => [...(event.dataTransfer?.types || [])].includes('Files');
+  window.addEventListener('dragenter', event => { if (!hasFiles(event)) return; dragDepth++; $('drop-overlay').hidden = false; });
+  window.addEventListener('dragleave', event => { if (!hasFiles(event)) return; if (--dragDepth <= 0) { dragDepth = 0; $('drop-overlay').hidden = true; } });
+  window.addEventListener('dragover', event => { if (hasFiles(event)) event.preventDefault(); });
+  window.addEventListener('drop', async event => {
+    if (!hasFiles(event)) return;
+    event.preventDefault(); dragDepth = 0; $('drop-overlay').hidden = true;
+    const file = event.dataTransfer.files[0]; if (!file) return;
+    try { openImport(await readFile(file), file.name); } catch (error) { toast(error.message, 'error'); }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (document.querySelector('dialog[open]')) return;
+    const ctrl = event.ctrlKey || event.metaKey;
+    const typing = event.target.matches?.('input[type="text"], input:not([type]), textarea');
+    if (ctrl && /^[1-9]$/.test(event.key)) {
+      const profile = state.library.profiles[Number(event.key) - 1];
+      if (profile) { event.preventDefault(); activate(profile.id); }
+    } else if (ctrl && !typing && (event.key === 'z' || event.key === 'Z')) {
+      event.preventDefault(); step(event.shiftKey ? 1 : -1);
+    } else if (ctrl && !typing && event.key === 'y') {
+      event.preventDefault(); step(1);
+    } else if (ctrl && event.key === 'o') {
+      event.preventDefault(); openImport();
+    } else if (event.key === 'Escape') closeMenus();
+  });
+
+  if (tauri) {
+    // The window waits for this before closing; don't let a stuck save keep it open.
+    tauri.window.getCurrentWindow().onCloseRequested(() => Promise.race([flushSave(), new Promise(done => setTimeout(done, 3000))]));
+  } else window.addEventListener('pagehide', () => flushSave(true));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus().catch(() => {}); });
+}
+
+async function start() {
+  wire();
+  try {
+    await refreshStatus();
+    adoptLibrary(await api('/api/profiles'));
+    loadActive();
+  } catch (error) {
+    $('status-dot').dataset.tone = 'error';
+    $('device-line').textContent = 'The editor could not start';
+    $('device-detail').textContent = error.message;
+    return;
+  }
+  pollStatus();
+}
+
+start();

@@ -11,6 +11,9 @@ import server
 
 class PersistentSessionTests(unittest.TestCase):
     def setUp(self):
+        audeze = patch.object(server.AudezeWatch, 'running', return_value=[])  # the real check reads this PC's processes
+        audeze.start()
+        self.addCleanup(audeze.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.path = Path(self.temporary.name) / 'session.json'
