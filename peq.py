@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import struct
 
-from extended_filters import rbj_biquad, filter_headroom_db, encode_bank
+from extended_filters import rbj_biquad, encode_bank
 
 DLL_SHA256 = '322ac1149eeba9ed55f2466ba706edc92dcdb333cf574a6466abf88e4b3d50be'
 DLL_NAME = 'AirohaPeqLibrary.dll'
@@ -77,15 +77,44 @@ def validate(request):
             raise ValueError('Shelf filters use fixed slope S=1 (Q=0.70710678).')
         filters.append(dict(type=kind, frequency=number(row.get('frequency'), 'Frequency', 20, 20000),
                             gain=gain, q=SHELF_Q if is_shelf else q, enabled=enabled))
-    # Analytical per-stage bounds include resonant pass filters; no sampled estimate.
-    headroom = sum(filter_headroom_db(f) for f in filters if f['enabled'])
+    headroom = headroom_db(filters)
     requested = request.get('preamp', 'auto')
-    preamp = -headroom if requested == 'auto' else number(requested, 'Preamp', -60, 0)
+    auto = -headroom if headroom > 0 else 0.
+    preamp = auto if requested == 'auto' else number(requested, 'Preamp', -60, 0)
     if preamp < -60:
         raise ValueError('This filter set needs more than 60 dB of headroom; reduce the boosts.')
     if preamp > -headroom + 1e-9:
         raise ValueError(f'Use Auto preamp or {(-headroom):g} dB or lower for these boosts.')
     return filters, preamp
+
+
+def probes(filters, rate, endpoints):
+    """Dense log grid plus centre and near-centre probes, to catch narrow-filter errors,
+    plus each resonant pass filter's peak and, with endpoints, DC and Nyquist."""
+    frequencies = {20 * 1000 ** (i / 767) for i in range(768)}
+    for f in filters:
+        for multiplier in (0.5, 0.9, 0.99, 1, 1.01, 1.1, 2):
+            frequencies.add(min(20000, max(20, f['frequency'] * multiplier)))
+    for f in filters:
+        if f['enabled'] and f['type'] in ('low_pass', 'high_pass') and f['q'] > SHELF_Q:
+            ratio = math.sqrt(1 - 1 / (2 * f['q'] ** 2))
+            ratio = ratio if f['type'] == 'low_pass' else 1 / ratio
+            frequencies.add(rate / math.pi * math.atan(math.tan(math.pi * f['frequency'] / rate) * ratio))
+    if endpoints:
+        frequencies |= {0., rate / 2}
+    return sorted(frequencies)
+
+
+def headroom_db(filters):
+    """The ideal cascade's highest gain at any rate, rounded up to 0.01 dB; 0 for cuts.
+    Boosts at different frequencies don't stack, so this is the curve's real peak."""
+    peak = 0.
+    for _, rate in RATES:
+        stages = [rbj_biquad(f, rate) for f in filters if f['enabled']]
+        for frequency in probes(filters, rate, True):
+            peak = max(peak, response(stages, 1., frequency, rate))
+    rounded = math.ceil(peak * 100 - 1e-6) / 100
+    return rounded if rounded > 0 else 0.
 
 
 def biquad(frequency, gain, q, rate):
@@ -178,27 +207,15 @@ def compile_preset(request):
     experimental = any(f['enabled'] and f['type'] != 'peak' for f in filters)
     banks, curves = [], []
     blob = bytearray(struct.pack('<I', len(RATES)))
-    # Dense log grid plus center/near-center probes detects narrow-filter errors.
-    frequencies = {20 * 1000 ** (i / 767) for i in range(768)}
-    for f in filters:
-        for multiplier in (0.5, 0.9, 0.99, 1, 1.01, 1.1, 2):
-            frequencies.add(min(20000, max(20, f['frequency'] * multiplier)))
-    frequencies = sorted(frequencies)
     max_error = 0.
     for rate_id, rate in RATES:
         words = encode_bank(filters, preamp, rate) if extended else compiler.bank(filters, preamp, rate)
         stages, scale = decode_words(words)
         ideal = [rbj_biquad(f, rate) for f in filters if f['enabled']]
         points, error = [], 0.
-        probes = set(frequencies)
-        for f in filters:
-            if f['enabled'] and f['type'] in ('low_pass', 'high_pass') and f['q'] > SHELF_Q:
-                ratio = math.sqrt(1 - 1 / (2 * f['q'] ** 2))
-                ratio = ratio if f['type'] == 'low_pass' else 1 / ratio
-                probes.add(rate / math.pi * math.atan(math.tan(math.pi * f['frequency'] / rate) * ratio))
         # Endpoints check shelf plateaus / passband gain; floor makes deep stopband
         # nulls meaningful to compare without dividing by a nearly-zero response.
-        for frequency in sorted(probes | ({0., rate / 2} if experimental else set())):
+        for frequency in probes(filters, rate, experimental):
             actual = response(stages, scale, frequency, rate)
             expected = response(ideal, 10 ** (preamp / 20), frequency, rate)
             error = max(error, abs(max(actual, -90) - max(expected, -90)) if experimental else abs(actual - expected))

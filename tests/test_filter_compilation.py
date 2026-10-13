@@ -21,7 +21,9 @@ class FilterValidationTests(unittest.TestCase):
     def test_resonant_pass_filters_require_headroom(self):
         f = row('high_pass', q=4)
         filters, preamp = peq.validate({'filters': [f]})
-        self.assertAlmostEqual(preamp, -filter_headroom_db(f))
+        bound = filter_headroom_db(f)
+        self.assertLessEqual(preamp, -bound)
+        self.assertGreater(preamp, -bound - .011)
         self.assertLess(preamp, -12)
         with self.assertRaises(ValueError):
             peq.validate({'filters': [f], 'preamp': 0})
@@ -51,7 +53,8 @@ class FilterCompilationTests(unittest.TestCase):
         result = peq.compile_preset({'filters': [row('low_shelf', 120, 6), row('peak', 1500, -5, 3),
                                                row('high_shelf', 6000, -4), row('low_pass', 16000),
                                                row('high_pass', 45)]})
-        self.assertEqual(result['preamp'], -6)
+        # The 45 Hz high-pass takes some of the shelf's +6 dB back off the peak.
+        self.assertEqual(result['preamp'], -4.66)
         self.assertLess(result['max_error_db'], .15)
         f = row('low_shelf', 30, 12)
         f['enabled'] = False

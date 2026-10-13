@@ -32,7 +32,8 @@ Audeze HQ only offers a ten-band graphic EQ. This tool writes real parametric co
 - 1–10 filters, 20–20,000 Hz, gain −12 to +12 dB, Q 0.1–20.
 - Shelves have a fixed slope (S = 1, Q ≈ 0.707). Pass filters are 12 dB/octave with adjustable Q and no gain.
 - Peaks are confirmed by listening on the headset; shelf and pass filters are experimental. The response plot is calculated, not measured.
-- Auto preamp subtracts the sum of maximum boosts; manual preamp must give at least that much headroom.
+- Auto preamp subtracts the peak of the combined curve; manual preamp must give at least that much headroom.
+- A rate that can't hold the filters precisely gets the nearest values it can (the other encoder, a slightly higher frequency or lower Q), and the editor says so.
 - Every device write is journaled; after an uncertain write, Apply/Save are blocked until a restore.
 - Switching profiles applies them live (temporarily). Saving to headset flash is a separate, deliberate action.
 - Device controls are on by default in the packaged app; `--offline` disables them.

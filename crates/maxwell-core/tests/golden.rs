@@ -98,7 +98,7 @@ fn compile_matches_python() {
     assert_eq!(fixture["dll_sha256"], vendor::DLL_SHA256);
     let mut failures = Vec::new();
     for case in fixture["cases"].as_array().unwrap() {
-        let mut actual = outcome(compile::compile_preset(&case["request"]));
+        let mut actual = outcome(compile::compile_with(&case["request"], compile::Encoder::Auto));
         // The fixture keeps every 16th curve point plus the count.
         if let Some(curves) = actual.pointer_mut("/result/curves").and_then(Value::as_array_mut) {
             for curve in curves {

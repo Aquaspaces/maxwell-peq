@@ -857,6 +857,27 @@ function renderProfiles() {
   if (focused) list.querySelector(`[data-id="${CSS.escape(focused)}"] .chip-button`)?.focus();
 }
 
+/* The compiler moves a value only in the sample-rate banks that can't hold it precisely. */
+function describeAdjustments(adjustments) {
+  const rates = list => {
+    const names = list.map(rate => String(rate / 1000));
+    return `${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]} kHz`;
+  };
+  const groups = new Map();
+  for (const change of adjustments) {
+    const key = change.encoder ? 'encoder' : `${change.filter}|${change.field}|${change.to}`;
+    if (!groups.has(key)) groups.set(key, {change, rates: []});
+    groups.get(key).rates.push(change.rate);
+  }
+  return [...groups.values()].map(({change, rates: list}) => {
+    const at = rates(list), one = list.length === 1;
+    if (change.encoder) return `At ${at}, the built-in encoder is used because the Audeze library can't hold these filters precisely there.`;
+    const value = change.field === 'q' ? `Q ${round(change.to, 3)}` : `${round(change.to, 1)} Hz`;
+    const was = change.field === 'q' ? `Q ${round(change.from, 3)}` : `${round(change.from, 1)} Hz`;
+    return `Filter ${change.filter + 1} is sent as ${value} instead of ${was} at ${at}, the nearest value ${one ? 'that rate' : 'those rates'} can hold precisely.`;
+  }).join(' ');
+}
+
 function renderEditorState() {
   const history = historyFor(state.library.active);
   const pending = JSON.stringify(state.preset) !== state.committed;
@@ -879,8 +900,10 @@ function renderEditorState() {
 
   const note = $('type-note');
   const text = issues.length ? issues.map(p => p.text).join(' ') : error;
+  const adjusted = compiled ? describeAdjustments(compiled.adjustments || []) : '';
   note.classList.toggle('error', !!text);
   if (text) note.textContent = text;
+  else if (adjusted) note.textContent = adjusted;
   else if (state.preset.filters.some(f => f.enabled && f.type !== 'peak'))
     note.textContent = 'Shelf and pass filters are experimental. Shelves use a fixed slope (S = 1), so Q does not apply.';
   else if (status().encoder === 'built-in')
