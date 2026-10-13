@@ -14,6 +14,12 @@ const state = {
 
 /* ---------- formatting ---------- */
 const round = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
+// Show at least `min` decimals so a column of values lines up, and up to `max` when the value needs them.
+const fixed = (value, min, max) => {
+  const text = String(round(value, max)), dot = text.indexOf('.');
+  const decimals = dot < 0 ? 0 : text.length - dot - 1;
+  return decimals >= min ? text : round(value, max).toFixed(min);
+};
 const minus = text => text.replace(/^-/, '−');
 const fmtDb = (value, digits = 1) => `${value > 0 ? '+' : ''}${minus(value.toFixed(digits))} dB`;
 const fmtHz = f => f >= 1000 ? `${round(f / 1000, f >= 10000 ? 1 : 2)} kHz` : `${round(f, 1)} Hz`;
@@ -324,7 +330,7 @@ function renderRowState({values = false} = {}) {
       const field = input.dataset.field;
       if (values || document.activeElement !== input) {
         const value = f[field];
-        const text = value === null || value === undefined ? '' : String(field === 'q' ? round(value, 3) : round(value, field === 'gain' ? 2 : 1));
+        const text = value === null || value === undefined ? '' : field === 'q' ? fixed(value, 2, 3) : field === 'gain' ? fixed(value, 1, 2) : String(round(value, 1));
         if (input.value !== text) input.value = text;
       }
       input.setAttribute('aria-invalid', issues.some(p => p.index === index && p.field === field) ? 'true' : 'false');
@@ -456,11 +462,13 @@ function renderDevice() {
   $('status-dot').dataset.tone = view.tone;
   $('device-line').textContent = view.line;
   $('device-detail').textContent = view.detail;
+  $('device-detail').title = view.detail;
   const live = !!s.live_enabled, busy = !!state.busy;
   const blocked = headsetBlocked();
 
   $('transport').disabled = busy || blocked;
   if (s.transport && state.busy !== 'connect') $('transport').value = s.transport;
+  $('transport-wrap').hidden = !live;
   $('connect').hidden = !live;
   $('connect').disabled = busy || blocked;
   $('connect').textContent = state.busy === 'connect' ? 'Reading…' : s.device_read ? 'Read again' : 'Read headset';
@@ -1083,7 +1091,7 @@ function renderImport(result) {
     const row = document.createElement('tr');
     if (f.enabled === false) row.className = 'off';
     for (const text of [i + 1, TYPES[f.type] + (f.enabled === false ? ' (off)' : ''), fmtHz(f.frequency),
-      isPass(f.type) ? '—' : fmtDb(f.gain), isShelf(f.type) ? 'S = 1' : round(f.q, 3)]) {
+      isPass(f.type) ? '—' : fmtDb(f.gain), isShelf(f.type) ? 'S = 1' : fixed(f.q, 2, 3)]) {
       const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
     }
     body.append(row);

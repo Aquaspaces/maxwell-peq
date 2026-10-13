@@ -126,8 +126,10 @@ const PEQGraph = (() => {
         if (!f) { handle.node.remove(); return; }
         if (!handle.node.isConnected) layers.handles.append(handle.node);
         const valid = Number.isFinite(f.frequency) && f.frequency >= 20 && f.frequency <= 20000;
-        handle.node.setAttribute('transform', `translate(${x(valid ? f.frequency : 1000).toFixed(1)},${y(handleDb(f)).toFixed(1)})`);
-        handle.node.setAttribute('class', `g-handle${index === model.selected ? ' selected' : ''}${f.enabled ? '' : ' off'}${isPass(f.type) ? ' pass' : ''}`);
+        // An out-of-range frequency pins the handle to the nearest edge instead of pretending it is at 1 kHz.
+        const shown = valid ? f.frequency : Number.isFinite(f.frequency) && f.frequency > 20000 ? 20000 : 20;
+        handle.node.setAttribute('transform', `translate(${x(shown).toFixed(1)},${y(handleDb(f)).toFixed(1)})`);
+        handle.node.setAttribute('class', `g-handle${index === model.selected ? ' selected' : ''}${f.enabled ? '' : ' off'}${isPass(f.type) ? ' pass' : ''}${valid ? '' : ' invalid'}`);
         handle.node.setAttribute('aria-label', `Filter ${index + 1}, ${typeNames[f.type]}, ${valid ? formatHz(f.frequency) : 'invalid frequency'}${isPass(f.type) ? '' : `, ${signed(f.gain || 0)} dB`}${isShelf(f.type) ? '' : `, Q ${Number(f.q).toFixed(2)}`}${f.enabled ? '' : ', off'}. Arrow keys move it, plus and minus change Q.`);
       });
       tip();
@@ -215,9 +217,11 @@ const PEQGraph = (() => {
     };
     svg.addEventListener('pointerup', end);
     svg.addEventListener('pointercancel', end);
+    // Q follows the wheel only over a handle or while one has keyboard focus, so scrolling the page never edits a filter.
     svg.addEventListener('wheel', event => {
-      const target = event.target.closest('[data-index]');
-      const index = target ? Number(target.dataset.index) : model.selected;
+      const target = event.target.closest('[data-index]') || (svg.contains(document.activeElement) && document.activeElement.closest('[data-index]'));
+      if (!target) return;
+      const index = Number(target.dataset.index);
       const f = model.filters[index];
       if (!f || isShelf(f.type) || !Number.isFinite(f.q)) return;
       event.preventDefault();

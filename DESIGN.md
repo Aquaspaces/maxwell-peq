@@ -25,15 +25,17 @@ Segoe UI Variable (system UI fallbacks), 13–14px body, tabular numerals for ev
 
 ## Layout
 
-- A 236px sidebar holds profiles (Ctrl+1–9 hints on hover) and APO import; the main column holds the header, the Audeze banner, the graph, the filter table and a sticky device bar.
+- A `clamp(264px, 24vw, 304px)` sidebar holds the four headset presets, the profiles not on the headset (one per row, ellipsised), and APO import pinned to the bottom; the main column holds the header, the Audeze banner, the graph, the filter table and a sticky device bar.
 - Graph height is `clamp(230px, 40vh, 440px)`. Range is ±15 dB, 20 Hz–20 kHz on a log axis.
-- The device bar always shows one status line with a coloured dot, then the controls in order of consequence: connection, Apply live, Connect, Apply, Save to headset, Restore.
+- The device bar always shows one status line with a coloured dot and up to two lines of detail, then the controls: connection, Read headset, Headset…, Balance…. Offline shows the status only. The bar never wraps.
 
 ## Components
 
-- **Graph handles**: numbered circles; the selected one is filled. Disabled filters are faint, pass filters sit on the 0 dB line. The selected filter's own curve is a thin dashed line under the total.
+- **Graph handles**: numbered circles; the selected one is filled. Disabled filters are faint, pass filters sit on the 0 dB line, and a filter with an out-of-range frequency sits at the nearest axis edge with a red dashed ring. The wheel changes Q only over a handle or a focused one. The selected filter's own curve is a thin dashed line under the total.
 - **Curve**: solid once compiled; dashed while the estimate is waiting on compilation; red dashed when compilation failed.
 - **Buttons**: primary (blue fill), default (raised grey), ghost (text only), danger, and `warn-solid` for the banner's Yes.
+- **Filter table**: values are right-aligned against their unit; gain shows at least one decimal and Q at least two. The selected row is a surface tint, with no side stripe.
+- **Switches**: 34×20 track, blue fill when on, for every on/off headset setting.
 - **Toasts**: bottom right, a coloured dot for the kind, no side stripe.
 - **Menus and dialogs** float with a 1px border and a soft shadow; they are the only shadowed layers.
 
