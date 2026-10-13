@@ -23,6 +23,7 @@ pub mod paths;
 pub mod profiles;
 pub mod protocol;
 pub mod service;
+pub mod traffic;
 pub mod util;
 pub mod vendor;
 pub mod worker;

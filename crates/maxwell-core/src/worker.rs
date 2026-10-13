@@ -1,11 +1,13 @@
 //! Running compile and device work. Device I/O always runs in a child process
 //! (`<this exe> --worker device`) so a stalled HID call can be killed.
 
+use crate::traffic::Traffic;
 use crate::{Error, Result};
-use serde_json::Value;
-use std::io::{Read, Write};
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +40,24 @@ pub fn compile(request: &Value) -> Result<Value> {
 }
 
 /// Run `exe --worker device` with the request on stdin and a hard deadline.
-pub fn device_subprocess(exe: &PathBuf, request: &Value, timeout: Duration) -> Result<Value> {
+/// The reports it exchanges with the headset go to `traffic` as they happen.
+pub fn device_subprocess(exe: &PathBuf, request: &Value, timeout: Duration, traffic: &Arc<Traffic>) -> Result<Value> {
+    traffic.push(json!({
+        "kind": "start",
+        "operation": request.get("operation").cloned().unwrap_or(Value::Null),
+        "transport": request.get("transport").cloned().unwrap_or(Value::Null),
+    }));
+    let result = run_device(exe, request, timeout, traffic);
+    traffic.push(match &result {
+        Ok(_) => json!({"kind": "end", "ok": true}),
+        Err(error) => json!({"kind": "end", "ok": false, "error": error.to_string()}),
+    });
+    result
+}
+
+fn run_device(exe: &PathBuf, request: &Value, timeout: Duration, traffic: &Arc<Traffic>) -> Result<Value> {
     let mut command = Command::new(exe);
-    command.args(["--worker", "device"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command.args(["--worker", "device"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -57,6 +74,13 @@ pub fn device_subprocess(exe: &PathBuf, request: &Value, timeout: Duration) -> R
         let mut output = Vec::new();
         stdout.read_to_end(&mut output).map(|_| output)
     });
+    let stderr = child.stderr.take().expect("piped");
+    let log = traffic.clone();
+    let tracer = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok) {
+            log.push_line(&line);
+        }
+    });
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -65,26 +89,29 @@ pub fn device_subprocess(exe: &PathBuf, request: &Value, timeout: Duration) -> R
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = tracer.join();
             return Err(Error::other(TIMED_OUT));
         }
         std::thread::sleep(Duration::from_millis(20));
     };
     let _ = writer.join();
+    let _ = tracer.join();
     let output = reader.join().ok().and_then(|output| output.ok()).unwrap_or_default();
     let result: Value = serde_json::from_slice(&output).map_err(|_| Error::other(INVALID))?;
     finish(result, status.success())
 }
 
-/// Compile in-process; device work in a child of `exe`.
-pub fn default_runner(exe: PathBuf) -> Runner {
+/// Compile in-process; device work in a child of `exe`, logged to `traffic`.
+pub fn default_runner(exe: PathBuf, traffic: Arc<Traffic>) -> Runner {
     Box::new(move |worker, request| match worker {
         Worker::Compile => compile(request),
-        Worker::Device => device_subprocess(&exe, request, TIMEOUT),
+        Worker::Device => device_subprocess(&exe, request, TIMEOUT, &traffic),
     })
 }
 
 /// The `--worker device` entry point: JSON in on stdin, JSON out on stdout.
 pub fn device_main() -> i32 {
+    crate::traffic::enable();
     let mut input = String::new();
     let request = std::io::stdin()
         .read_to_string(&mut input)

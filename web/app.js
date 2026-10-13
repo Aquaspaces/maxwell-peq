@@ -1129,7 +1129,103 @@ async function confirmImport(event) {
 }
 
 /* ---------- wiring ---------- */
+/* ---------- raw HID traffic ---------- */
+// Every report the device worker writes (and, with Replies on, each reply that carries data), as it happens.
+const traffic = {next: 0, started: 0, timer: null, lines: []};
+const MAX_TRAFFIC_ROWS = 1500;
+const clock = ms => { const d = new Date(ms); return `${d.toLocaleTimeString([], {hour12: false})}.${String(d.getMilliseconds()).padStart(3, '0')}`; };
+const hexBytes = hex => hex.match(/../g) || [];
+// Output reports are `06, length, flags` and input reports `07, length, meta`, then the payload and zero padding.
+function reportParts(hex) {
+  const bytes = hexBytes(hex), length = parseInt(bytes[1] || '0', 16), end = Math.min(3 + length, bytes.length);
+  const rest = bytes.slice(end), zeros = rest.every(b => b === '00');
+  return {head: bytes.slice(0, 3), payload: bytes.slice(3, end), pad: zeros ? [] : rest, zeros: zeros ? rest.length : 0, total: bytes.length};
+}
+function trafficEntry(entry) {
+  const row = document.createElement('div');
+  if (entry.kind === 'start') {
+    traffic.started = entry.at;
+    row.className = 'traffic-op';
+    const time = document.createElement('time');
+    time.textContent = clock(entry.at);
+    row.append(time, `${entry.operation ?? 'device'}${entry.transport ? ` · ${entry.transport}` : ''}`);
+    traffic.lines.push('', `${clock(entry.at)} ${entry.operation ?? 'device'} ${entry.transport ?? ''}`.trimEnd());
+  } else if (entry.kind === 'end') {
+    const took = traffic.started ? ` in ${entry.at - traffic.started} ms` : '';
+    row.className = `traffic-end${entry.ok ? '' : ' failed'}`;
+    row.textContent = entry.ok ? `Done${took}` : `Failed${took}: ${entry.error}`;
+    traffic.lines.push(row.textContent);
+  } else if (entry.kind === 'out' || entry.kind === 'in') {
+    const out = entry.kind === 'out', parts = reportParts(entry.hex);
+    row.className = `traffic-row ${entry.kind}`;
+    row.title = `${out ? 'Sent' : 'Received'} ${clock(entry.at)} · ${parts.total} bytes`;
+    const dir = document.createElement('span');
+    dir.className = 'dir'; dir.textContent = out ? '→' : '←';
+    const bytes = document.createElement('span');
+    bytes.className = 'bytes';
+    const head = document.createElement('span');
+    head.className = 'head'; head.textContent = parts.head.join(' ');
+    bytes.append(head, ' ', [...parts.payload, ...parts.pad].join(' '));
+    if (parts.zeros) {
+      const pad = document.createElement('span');
+      pad.className = 'pad'; pad.textContent = ` +${parts.zeros}×00`;
+      bytes.append(pad);
+    }
+    row.append(dir, bytes);
+    traffic.lines.push(`${clock(entry.at)} ${out ? '>' : '<'} ${hexBytes(entry.hex).join(' ')}`);
+  } else {
+    row.className = 'traffic-note'; row.textContent = entry.text ?? '';
+    traffic.lines.push(row.textContent);
+  }
+  return row;
+}
+function showTraffic(entries) {
+  if (!entries.length) return;
+  const log = $('traffic-log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+  $('traffic-empty').hidden = true;
+  log.append(...entries.map(trafficEntry));
+  while (log.childElementCount > MAX_TRAFFIC_ROWS + 1) log.children[1].remove();
+  if (traffic.lines.length > MAX_TRAFFIC_ROWS * 2) traffic.lines.splice(0, traffic.lines.length - MAX_TRAFFIC_ROWS * 2);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+// Asks for new entries four times a second; the request never waits on the headset.
+function pollTraffic() {
+  clearTimeout(traffic.timer);
+  traffic.timer = setTimeout(async () => {
+    let failed = false;
+    if (!document.hidden) {
+      try {
+        const result = await api('/api/traffic', {since: traffic.next});
+        traffic.next = result.next;
+        showTraffic(result.entries);
+      } catch { failed = true; }
+    }
+    if (failed) traffic.timer = setTimeout(pollTraffic, 2000);
+    else pollTraffic();
+  }, 250);
+}
+function wireTraffic() {
+  const log = $('traffic-log');
+  $('traffic-replies').addEventListener('change', event => log.classList.toggle('hide-replies', !event.target.checked));
+  log.classList.add('hide-replies');
+  $('traffic-clear').addEventListener('click', async () => {
+    await api('/api/traffic/clear', {}).catch(() => {});
+    log.replaceChildren($('traffic-empty'));
+    $('traffic-empty').hidden = false;
+    traffic.lines = [];
+  });
+  $('traffic-copy').addEventListener('click', async () => {
+    const replies = $('traffic-replies').checked;
+    const text = traffic.lines.filter(line => replies || !/^\S+ < /.test(line)).join('\n').trim();
+    if (!text) { toast('Nothing has been sent to the headset yet.'); return; }
+    try { await navigator.clipboard.writeText(text); toast('Copied the traffic log.'); }
+    catch { toast('Could not copy the traffic log.', 'error'); }
+  });
+}
+
 function wire() {
+  wireTraffic();
   graph = PEQGraph.create($('graph'), {
     onSelect: (index, options) => select(index, options),
     onDrag(index, change) {
@@ -1302,6 +1398,7 @@ async function start() {
     return;
   }
   pollStatus();
+  pollTraffic();
   const s = status();
   if (s.live_enabled && !s.audeze_running) readHeadset({quiet: true});
 }

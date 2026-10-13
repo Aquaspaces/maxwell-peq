@@ -7,6 +7,7 @@ use crate::app::App;
 use crate::audeze::{self, AudezeWatch};
 use crate::json::{get, get_or_null, object};
 use crate::profiles::{Profiles, check_preset};
+use crate::traffic::Traffic;
 use crate::worker::Runner;
 use crate::{Result, apo};
 use serde_json::{Value, json};
@@ -38,6 +39,8 @@ pub struct Service {
     pub audeze: Arc<AudezeWatch>,
     pub token: String,
     pub data_dir: Option<PathBuf>,
+    /// The raw reports device workers exchange with the headset.
+    pub traffic: Arc<Traffic>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -45,11 +48,24 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Service {
-    /// Load profiles from `data_dir`.
-    pub fn new(enable_live: bool, data_dir: Option<PathBuf>, audeze: Arc<AudezeWatch>, runner: Runner) -> Result<Self> {
+    /// Load profiles from `data_dir`. `traffic` is the log `runner` writes to.
+    pub fn new(
+        enable_live: bool,
+        data_dir: Option<PathBuf>,
+        audeze: Arc<AudezeWatch>,
+        runner: Runner,
+        traffic: Arc<Traffic>,
+    ) -> Result<Self> {
         let app = App::new(enable_live, data_dir.clone(), audeze.clone(), runner);
         let profiles = Profiles::load(data_dir.as_deref().map(crate::paths::profiles_path))?;
-        Ok(Service { token: app.token.clone(), app: Mutex::new(app), profiles: Mutex::new(profiles), audeze, data_dir })
+        Ok(Service {
+            token: app.token.clone(),
+            app: Mutex::new(app),
+            profiles: Mutex::new(profiles),
+            audeze,
+            data_dir,
+            traffic,
+        })
     }
 
     pub fn status(&self) -> Value {
@@ -65,6 +81,12 @@ impl Service {
     fn local(&self, path: &str, request: &Value) -> Option<Result<Value>> {
         Some(match path {
             "/api/compile" => crate::worker::compile(request),
+            // Never waits for the device lock, so the panel updates while a write runs.
+            "/api/traffic" => Ok(self.traffic.since(get(request, "since").and_then(Value::as_u64).unwrap_or(0))),
+            "/api/traffic/clear" => {
+                self.traffic.clear();
+                Ok(json!({}))
+            }
             _ if path.starts_with("/api/profiles/") => lock(&self.profiles).perform(path, request),
             "/api/apo/parse" => apo::parse(get_or_null(request, "text")),
             "/api/apo/export" => check_preset(get(request, "preset"))

@@ -236,6 +236,15 @@ impl<T: ReportIo> Session<T> {
         validate_request(packet, self.allow_live, self.allow_persistent)
     }
 
+    /// One input report; those carrying data are traced.
+    fn input(&mut self) -> Result<Vec<u8>> {
+        let report = self.io.input()?;
+        if report.get(1).is_some_and(|&length| length > 0) {
+            crate::traffic::trace("in", &report);
+        }
+        Ok(report)
+    }
+
     /// Validate, empty old input, and write every report of one request.
     fn send(&mut self, packet: &[u8]) -> Result<()> {
         self.send_flagged(packet, self.transport == Transport::Dongle)
@@ -249,6 +258,7 @@ impl<T: ReportIo> Session<T> {
         // Empty old responses before writing. Failure to empty aborts the write.
         self.drain()?;
         for report in reports {
+            crate::traffic::trace("out", &report);
             if !self.io.write(&report)? {
                 return Err(Error::other("Incomplete HID write; live state may be uncertain"));
             }
@@ -269,7 +279,7 @@ impl<T: ReportIo> Session<T> {
         let deadline = Instant::now() + Duration::from_secs_f64(timeout);
         while Instant::now() < deadline {
             (self.sleep)(Duration::from_millis(10));
-            for message in stream.feed(&self.io.input()?)? {
+            for message in stream.feed(&self.input()?)? {
                 if message[..2] != [0x05, 0x5B] || check_packet(&message, 0x5B)?.0 != command {
                     continue;
                 }
@@ -296,7 +306,7 @@ impl<T: ReportIo> Session<T> {
         let deadline = Instant::now() + Duration::from_secs_f64(timeout);
         while Instant::now() < deadline {
             (self.sleep)(Duration::from_millis(10));
-            for message in stream.feed(&self.io.input()?)? {
+            for message in stream.feed(&self.input()?)? {
                 let kind = message[1];
                 if !matches!(kind, 0x5B | 0x5D) || check_packet(&message, kind)?.0 != command {
                     continue;
@@ -326,7 +336,7 @@ impl<T: ReportIo> Session<T> {
     pub fn drain(&mut self) -> Result<()> {
         let mut empty_polls = 0;
         for _ in 0..100 {
-            let report = self.io.input()?;
+            let report = self.input()?;
             if report.len() < 2 || report[0] != 7 || report[1] > 59 {
                 return Err(Error::value("Malformed report while draining input"));
             }

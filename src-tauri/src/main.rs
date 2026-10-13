@@ -8,6 +8,7 @@
 
 use maxwell_core::audeze::AudezeWatch;
 use maxwell_core::service::Service;
+use maxwell_core::traffic::Traffic;
 use maxwell_core::{http, paths, worker};
 use serde_json::Value;
 use std::fs::{File, TryLockError};
@@ -173,11 +174,13 @@ fn run(options: &Options) -> i32 {
             return 1;
         }
     };
+    let traffic = Arc::new(Traffic::default());
     let service = match Service::new(
         !options.offline,
         Some(data.clone()),
         Arc::new(AudezeWatch::default()),
-        worker::default_runner(exe),
+        worker::default_runner(exe, traffic.clone()),
+        traffic,
     ) {
         Ok(service) => Arc::new(service),
         // e.g. a damaged profiles file: keep the files and say where they are.
