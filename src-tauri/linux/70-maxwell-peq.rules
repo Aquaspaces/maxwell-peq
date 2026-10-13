@@ -1,5 +1,8 @@
-# Maxwell PEQ: let the logged-in user open the original Audeze Maxwell
-# (PlayStation) control interface, over USB-C (4b1a) or the dongle (4b19).
+# Maxwell PEQ: let the logged-in user open the original Audeze Maxwell control
+# interface: PlayStation over USB-C (4b1a) or its dongle (4b19), Xbox over
+# USB-C (4b1e) or its dongle (4b18).
 # Install to /etc/udev/rules.d, then unplug and replug the headset or dongle.
 KERNEL=="hidraw*", ATTRS{idVendor}=="3329", ATTRS{idProduct}=="4b19", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="3329", ATTRS{idProduct}=="4b1a", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3329", ATTRS{idProduct}=="4b18", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3329", ATTRS{idProduct}=="4b1e", TAG+="uaccess"

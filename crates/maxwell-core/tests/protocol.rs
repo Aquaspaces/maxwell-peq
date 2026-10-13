@@ -3,7 +3,7 @@
 //! and test_device_access.py.
 
 use maxwell_core::device::Device;
-use maxwell_core::hid::{Interface, Model, ReportIo, Session, Transport, select};
+use maxwell_core::hid::{Interface, Model, ReportIo, Session, Transport, label, select};
 use maxwell_core::protocol::*;
 use maxwell_core::{Error, Result};
 use std::collections::VecDeque;
@@ -344,6 +344,16 @@ fn product_ids_pick_the_model_for_the_transport() {
         assert_eq!(select(vec![(dongle, ())], Transport::Dongle).unwrap().0, Model::Maxwell2);
         assert!(select(vec![(dongle, ())], Transport::Usb).is_err());
     }
+}
+
+#[test]
+fn xbox_ids_are_the_original_maxwell() {
+    assert_eq!(select(vec![(0x4B1E, ())], Transport::Usb).unwrap(), (Model::Maxwell, 0x4B1E, ()));
+    assert_eq!(select(vec![(0x4B18, ())], Transport::Dongle).unwrap(), (Model::Maxwell, 0x4B18, ()));
+    assert!(select(vec![(0x4B18, ())], Transport::Usb).is_err());
+    assert_eq!(label(Model::Maxwell, 0x4B1E), "Original Maxwell Xbox (untested)");
+    assert_eq!(label(Model::Maxwell, 0x4B18), "Original Maxwell Xbox (untested)");
+    assert_eq!(label(Model::Maxwell, 0x4B1A), "Original Maxwell PS");
 }
 
 #[test]
