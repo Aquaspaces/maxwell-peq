@@ -251,7 +251,10 @@ fn run_worker(request: Value, fail_write: Option<u8>) -> (Result<Value>, Progres
 #[test]
 fn read_opens_without_write_permission() {
     let (result, _, log) = run_worker(json!({"operation": "balance_read", "transport": "dongle"}), None);
-    assert_eq!(result.unwrap(), json!({"left": 141, "right": 149, "source": 10, "source_profile": "usb-c"}));
+    assert_eq!(
+        result.unwrap(),
+        json!({"left": 141, "right": 149, "source": 10, "source_profile": "usb-c", "transport": "dongle"})
+    );
     assert_eq!(log.borrow().opened, vec![(false, Transport::Dongle)]);
 }
 
@@ -316,7 +319,7 @@ fn app(enable: bool, replies: Vec<Result<Value>>) -> (App, Arc<Mutex<Vec<Value>>
         replies.pop_front().expect("unexpected worker call")
     });
     let quiet = Arc::new(AudezeWatch::new(Box::new(|| Some(vec![])), Duration::from_secs(60)));
-    (App::new(enable, None, quiet, runner).unwrap(), calls)
+    (App::new(enable, None, quiet, runner), calls)
 }
 
 fn read_reply() -> Value {
@@ -345,8 +348,8 @@ fn read_then_apply_routes_to_the_worker() {
     assert_eq!(calls[1], json!({"operation": "balance_write", "transport": "dongle", "left": 141, "right": 145}));
     assert_eq!(app.status()["balance"]["right"], json!(145));
     // EQ state is untouched.
-    assert_eq!(app.live_state, "unchanged");
-    assert!(app.backup.is_null());
+    assert!(app.index.is_null() && app.links.iter().all(Value::is_null));
+    assert_eq!(app.status()["transport"], json!("auto"));
 }
 
 #[test]
@@ -354,7 +357,7 @@ fn writes_go_through_the_connection_that_was_read() {
     let (mut app, calls) = app(true, vec![Ok(read_reply())]);
     app.perform("/api/balance/read", &json!({"transport": "dongle"})).unwrap();
     // The EQ connection is not moved by a balance read.
-    assert_eq!(app.status()["transport"], json!("usb"));
+    assert_eq!(app.status()["transport"], json!("auto"));
     let error = app.perform("/api/balance/apply", &json!({"transport": "usb", "left": 140, "right": 149})).unwrap_err();
     assert!(error.to_string().contains("through this connection"));
     assert_eq!(calls.lock().unwrap().len(), 1);

@@ -111,6 +111,39 @@ pub fn validate_setting_write(packet: &[u8]) -> Result<()> {
     check_setting_value(payload[0], payload[2])
 }
 
+/// Presets 7..10 are the four custom slots, shown as Preset 1..4 in the Audeze app.
+pub const CUSTOM_INDEXES: std::ops::RangeInclusive<u8> = 7..=10;
+
+/// Make preset `index` active: 0x0900 sub 0, as the Audeze app's
+/// `MaxwellTransport::writePeqIndex` sends it. Only the custom presets.
+pub fn select_preset_command(index: u8) -> Result<Vec<u8>> {
+    if !CUSTOM_INDEXES.contains(&index) {
+        return Err(error("Only custom presets 7..10 can be selected"));
+    }
+    packet(0x0900, &[0, 0, index])
+}
+
+/// Opt-in preset selection, nothing else.
+pub fn validate_select(packet: &[u8]) -> Result<()> {
+    let (command, payload) = check_packet(packet, 0x5A)?;
+    if command != 0x0900 || payload.len() != 3 || payload[..2] != [0, 0] || !CUSTOM_INDEXES.contains(&payload[2]) {
+        return Err(error("Command is outside the preset-select allowlist"));
+    }
+    Ok(())
+}
+
+/// The Audeze app accepts `05 5B 05 00 00 09 00 00 ..`: status 0, sub 0.
+pub fn parse_select_ack(packet: &[u8]) -> Result<()> {
+    let (command, payload) = check_packet(packet, 0x5B)?;
+    if command != 0x0900 || payload.len() != 3 || payload[1] != 0 {
+        return Err(error("Unexpected preset-change acknowledgement"));
+    }
+    if payload[0] != 0 {
+        return Err(error(format!("Headset rejected the preset change (status {})", payload[0])));
+    }
+    Ok(())
+}
+
 pub fn read_ui_command(slot: u8) -> Result<Vec<u8>> {
     check_slot(slot)?;
     packet(0x0A0C, &key_read(UI_KEY + u16::from(slot)))
@@ -296,17 +329,28 @@ fn stored_value<'a>(packet: &'a [u8], payload: &[u8], key: u16, message: &str) -
 }
 
 pub fn parse_coefficients(packet: &[u8], slot: u8) -> Result<Vec<u8>> {
+    parse_stored_coefficients(packet, slot)?
+        .ok_or_else(|| error(format!("Preset {} has no saved EQ on the headset", slot + 1)))
+}
+
+/// Like [`parse_coefficients`], but a key the headset reports as missing (a
+/// nonzero status for the right key) is `None`: that preset was never saved.
+pub fn parse_stored_coefficients(packet: &[u8], slot: u8) -> Result<Option<Vec<u8>>> {
     check_slot(slot)?;
     let (command, payload) = check_packet(packet, 0x5B)?;
     let message = "Unexpected saved coefficient response";
     if command != 0x0A0C {
         return Err(error(message));
     }
-    let raw = stored_value(packet, payload, COEFFICIENT_KEY + u16::from(slot), message)?;
+    let key = COEFFICIENT_KEY + u16::from(slot);
+    if payload.len() >= 3 && payload[0] != 0 && le16(payload, 1) == key {
+        return Ok(None);
+    }
+    let raw = stored_value(packet, payload, key, message)?;
     if usize::from(le16(payload, 3)) != raw.len() {
         return Err(error("Saved coefficient length does not match data"));
     }
-    Ok(raw.to_vec())
+    Ok(Some(raw.to_vec()))
 }
 
 #[derive(Debug, Clone, PartialEq)]

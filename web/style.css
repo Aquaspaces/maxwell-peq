@@ -64,7 +64,6 @@ kbd { font: inherit; }
 .button.danger:hover:not(:disabled) { background: #9a1c1c; border-color: #9a1c1c; }
 .button.warn-solid { background: var(--warn); border-color: var(--warn); color: #241a04; }
 .button.warn-solid:hover:not(:disabled) { background: #f8d48b; border-color: #f8d48b; }
-.button.attention { color: var(--danger); }
 .button svg { width: 15px; height: 15px; }
 
 .icon-button {
@@ -96,34 +95,74 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .unit-input > span { position: absolute; right: 8px; color: var(--faint); font-size: 12px; pointer-events: none; }
 
 /* ---------- shell ---------- */
-.shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); height: 100vh; }
+.shell { display: grid; grid-template-columns: 304px minmax(0, 1fr); height: 100vh; }
 
 .sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--line); }
 .brand { padding: 18px 16px 16px; border-bottom: 1px solid var(--line); }
 .brand-name { display: block; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 .brand-device { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
-.sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 10px 6px 16px; }
+.sidebar-heading { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 12px 10px 6px 16px; }
 .sidebar-heading h2 { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
-.profile-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0 8px 8px; list-style: none; }
-.profile-item { position: relative; display: flex; align-items: center; border-radius: var(--radius); }
-.profile-item + .profile-item { margin-top: 1px; }
-.profile-button {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  height: 34px; padding: 0 34px 0 10px;
-  border: 0; border-radius: var(--radius); background: transparent; color: var(--muted);
-  text-align: left; cursor: pointer;
+
+/* A profile box, in a preset row or in the pool below. */
+.chip { position: relative; display: flex; min-width: 0; }
+.chip-button {
+  flex: 1; min-width: 0; height: 32px; padding: 0 28px 0 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface);
+  color: var(--text); text-align: left; cursor: grab;
+  transition: background-color .12s, border-color .12s;
 }
-.profile-button:hover { background: var(--surface); color: var(--text); }
-.profile-button[aria-current="true"] { background: var(--surface-2); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
-.profile-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-button kbd { color: var(--faint); font-size: 11px; font-weight: 400; opacity: 0; transition: opacity .12s; }
-.profile-item:hover kbd, .profile-button:focus-visible kbd { opacity: 1; }
-.profile-item .more { position: absolute; right: 4px; opacity: 0; }
-.profile-item:hover .more, .profile-item .more:focus-visible, .profile-item .more[aria-expanded="true"] { opacity: 1; }
-.profile-item:hover kbd { display: none; }
-.badge { flex: none; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
-.badge.live { background: var(--accent-soft); color: var(--link); }
-.badge.saved { background: rgba(74, 222, 128, .12); color: #86efac; }
+.chip-button:hover { background: var(--surface-2); border-color: #55575f; }
+.chip-button:active { cursor: grabbing; }
+.chip-button[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.chip-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chip .more { position: absolute; top: 2px; right: 2px; opacity: 0; }
+.chip:hover .more, .chip .more:focus-visible, .chip .more[aria-expanded="true"] { opacity: 1; }
+
+/* Preset rows: dot and name pick the active preset, the box on the right is what it holds. */
+.slots { flex: none; }
+.slot-list { display: grid; gap: 4px; margin: 0; padding: 0 8px; list-style: none; }
+.slot {
+  display: grid; grid-template-columns: auto 16px minmax(0, 1fr); align-items: center; column-gap: 6px;
+  padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius);
+  transition: border-color .12s, background-color .12s;
+}
+.slot-select {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 6px;
+  border: 0; border-radius: var(--radius); background: transparent;
+  color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.slot-select:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.slot-select:disabled { cursor: default; opacity: .6; }
+.slot.active .slot-select { color: var(--text); cursor: default; }
+.slot.active .slot-select:hover { background: transparent; }
+.slot-dot { width: 12px; height: 12px; border: 1.5px solid #6b6d74; border-radius: 50%; }
+.slot-select:hover:not(:disabled) .slot-dot { border-color: var(--ok); }
+.slot.active .slot-dot { border-color: var(--ok); background: var(--ok); box-shadow: 0 0 0 3px rgba(74, 222, 128, .18); }
+.slot-select.pending .slot-dot { border-color: var(--ok); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { background: rgba(74, 222, 128, .5); } }
+.slot-link { width: 16px; height: 16px; color: var(--muted); }
+.slot-link.empty { color: #4a4c53; }
+.slot-target { min-width: 0; }
+.slot-empty {
+  display: flex; align-items: center; height: 32px; padding: 0 10px;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius);
+  overflow: hidden; color: var(--faint); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis;
+}
+.slot-note { grid-column: 3; padding: 2px 2px 0; color: var(--warn); font-size: 12px; }
+.slot .link-button:disabled { color: var(--faint); opacity: .6; cursor: default; text-decoration: none; }
+.dragging-profile .slot:not(.locked) .slot-target > * { border-color: var(--accent); border-style: dashed; }
+.dragging-profile .slot.drop { border-color: var(--accent); background: var(--accent-soft); }
+.dragging-profile .slot.drop .slot-target > * { border-style: solid; }
+
+.pool-heading { margin-top: 10px; border-top: 1px solid var(--line); }
+.slots[hidden] + .pool-heading { margin-top: 0; border-top: 0; }
+.profile-list {
+  flex: 1; min-height: 0; overflow-y: auto; align-content: start;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;
+  margin: 0; padding: 0 8px 8px; list-style: none;
+}
+.slot-hint { padding: 0 16px 4px; color: var(--faint); font-size: 12px; }
 .sidebar-import {
   display: flex; align-items: center; gap: 8px; margin: 8px; padding: 9px 10px;
   border: 1px dashed var(--line-strong); border-radius: var(--radius); background: transparent;
@@ -235,29 +274,20 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .device-controls { display: flex; align-items: center; gap: 8px; flex: none; }
 .device-controls select { height: 32px; }
 
-.switch { display: inline-flex; align-items: center; gap: 8px; margin: 0 4px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.switch-track { position: relative; width: 30px; height: 17px; border-radius: 9px; background: #45474e; transition: background-color .15s; }
-.switch-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #d4d5d8; transition: transform .15s; }
-.switch input:checked + .switch-track { background: var(--accent-button); }
-.switch input:checked + .switch-track::after { transform: translateX(13px); background: #fff; }
-.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
-.switch input:checked ~ span:last-child { color: var(--text); }
 
 /* ---------- menus ---------- */
-.menu-anchor { position: relative; }
 .menu {
   position: fixed; z-index: 20; min-width: 170px; padding: 4px;
   border: 1px solid var(--line-strong); border-radius: 8px; background: #2a2b30;
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
-.menu.up { position: absolute; right: 0; bottom: calc(100% + 6px); width: 290px; }
 .menu button {
   display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent;
   color: var(--text); font-size: 13px; text-align: left; cursor: pointer;
 }
 .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
 .menu button:disabled { opacity: .4; cursor: default; }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--line-strong); }
 .menu button small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
 .menu button.danger { color: var(--danger); }
 

@@ -5,7 +5,7 @@
 //! and stores it in NVDM in the same step. Every write is read back, and runs
 //! report the values they found first so they can be put back.
 
-use crate::hid::Transport;
+use crate::hid::{Transport, connect, requested};
 use crate::json::{get, object};
 use crate::protocol::{LEFT_GAIN, RIGHT_GAIN, SOURCE_PROFILE, USB_C_PROFILE, WIRELESS_PROFILE, check_gain};
 use crate::{Error, Result};
@@ -57,15 +57,6 @@ fn read_all(device: &mut dyn Settings) -> Result<Value> {
     ]))
 }
 
-fn transport(request: &Value) -> Result<Transport> {
-    match get(request, "transport") {
-        None => Ok(Transport::Usb),
-        Some(value) => {
-            value.as_str().and_then(Transport::parse).ok_or_else(|| Error::value("Choose usb or dongle transport."))
-        }
-    }
-}
-
 pub fn execute(request: &Value, open: &mut OpenSettings, progress: &mut Progress) -> Result<Value> {
     *progress = Progress::default();
     let operation = get(request, "operation").and_then(Value::as_str).unwrap_or_default();
@@ -79,9 +70,9 @@ pub fn execute(request: &Value, open: &mut OpenSettings, progress: &mut Progress
         },
         _ => return Err(Error::value("Unsupported device operation.")),
     };
-    let transport = transport(request)?;
-    let mut device = open(!writes.is_empty(), transport)?;
-    let before = read_all(device.as_mut())?;
+    let (mut device, transport) = connect(requested(request)?, |transport| open(!writes.is_empty(), transport))?;
+    let mut before = read_all(device.as_mut())?;
+    before["transport"] = json!(transport.name());
     if writes.is_empty() {
         return Ok(before);
     }
@@ -102,6 +93,7 @@ pub fn execute(request: &Value, open: &mut OpenSettings, progress: &mut Progress
         }
     }
     let mut after = read_all(device.as_mut())?;
+    after["transport"] = json!(transport.name());
     after["previous"] = before;
     after["write_replies_hex"] = Value::Array(replies);
     Ok(after)

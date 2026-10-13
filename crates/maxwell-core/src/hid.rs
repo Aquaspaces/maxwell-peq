@@ -1,9 +1,8 @@
 //! Request/reply transactions over the headset's vendor HID collection.
 //!
 //! Only opening a session enumerates devices. Every write passes the read /
-//! live / save allowlist, or the settings allowlist, with explicit write
-//! capabilities. HID calls are
-//! synchronous: the timeout bounds polling but cannot interrupt a stalled
+//! live / save allowlist, the preset-select allowlist or the settings allowlist,
+//! each enabled explicitly. HID calls are synchronous: the timeout bounds polling but cannot interrupt a stalled
 //! `HidD_GetInputReport`, so the app runs sessions in a worker process.
 
 use crate::balance::Settings;
@@ -11,8 +10,9 @@ use crate::device::Device;
 use crate::json::object;
 use crate::protocol::{
     InputStream, check_packet, frame, live_command, parse_coefficients, parse_index, parse_live_ack, parse_save_ack,
-    parse_setting, parse_storage_space, parse_ui, read_coefficients_command, read_index_command, read_setting_command,
-    read_ui_command, save_coefficients_command, storage_space_command, validate_request, validate_setting_write,
+    parse_select_ack, parse_setting, parse_storage_space, parse_stored_coefficients, parse_ui,
+    read_coefficients_command, read_index_command, read_setting_command, read_ui_command, save_coefficients_command,
+    select_preset_command, storage_space_command, validate_request, validate_select, validate_setting_write,
     write_setting_command,
 };
 use crate::{Error, Result};
@@ -54,6 +54,45 @@ impl Transport {
     }
 }
 
+/// The connection a request asks for: `None` means automatic. A missing
+/// transport is automatic too.
+pub fn requested(request: &serde_json::Value) -> Result<Option<Transport>> {
+    match crate::json::get(request, "transport") {
+        None => Ok(None),
+        Some(serde_json::Value::String(name)) if name == "auto" => Ok(None),
+        Some(value) => value
+            .as_str()
+            .and_then(Transport::parse)
+            .map(Some)
+            .ok_or_else(|| Error::value("Choose auto, usb or dongle transport.")),
+    }
+}
+
+/// Open through `requested`, or automatically: USB-C first, since its
+/// interface exists only while the cable is plugged in, then the dongle,
+/// which is present even when the headset is off.
+pub fn connect<T>(
+    requested: Option<Transport>,
+    mut open: impl FnMut(Transport) -> Result<T>,
+) -> Result<(T, Transport)> {
+    if let Some(transport) = requested {
+        return open(transport).map(|device| (device, transport));
+    }
+    let missing = |error: &Error| error.to_string().contains(", found 0");
+    let usb = match open(Transport::Usb) {
+        Ok(device) => return Ok((device, Transport::Usb)),
+        Err(error) if missing(&error) => error,
+        Err(error) => return Err(error),
+    };
+    match open(Transport::Dongle) {
+        Ok(device) => Ok((device, Transport::Dongle)),
+        Err(dongle) if missing(&dongle) && missing(&usb) => Err(Error::other(
+            "No headset found. Connect it by USB-C, or plug in its PlayStation dongle and turn the headset on.",
+        )),
+        Err(dongle) => Err(dongle),
+    }
+}
+
 /// Raw report I/O on one opened collection.
 pub trait ReportIo {
     /// One input report (report ID 7), `input_size` bytes long.
@@ -78,6 +117,8 @@ pub struct Session<T: ReportIo> {
     pub allow_persistent: bool,
     /// Channel gain and source-profile writes. Never set with the EQ permissions.
     pub allow_settings: bool,
+    /// Switching the active preset to one of the four custom presets.
+    pub allow_select: bool,
     /// Pause between polls; tests replace it.
     pub sleep: fn(Duration),
 }
@@ -91,12 +132,16 @@ impl<T: ReportIo> Session<T> {
             allow_live,
             allow_persistent,
             allow_settings: false,
+            allow_select: false,
             sleep: std::thread::sleep,
         }
     }
 
     fn check(&self, packet: &[u8]) -> Result<()> {
         if self.allow_settings && validate_setting_write(packet).is_ok() {
+            return Ok(());
+        }
+        if self.allow_select && validate_select(packet).is_ok() {
             return Ok(());
         }
         validate_request(packet, self.allow_live, self.allow_persistent)
@@ -180,12 +225,13 @@ impl<T: ReportIo> Session<T> {
             0x0901 => {
                 parse_setting(&message, packet[6])?;
             }
+            0x0900 if packet[6] == 0 => parse_select_ack(&message)?,
             0x0900 => {}
             _ if packet[7] == 0xEF => {
                 parse_ui(&message, packet[6])?;
             }
             _ => {
-                parse_coefficients(&message, packet[6] - 0x2C)?;
+                parse_stored_coefficients(&message, packet[6] - 0x2C)?;
             }
         }
         Ok(message)
@@ -196,6 +242,7 @@ impl<T: ReportIo> Session<T> {
 /// only when two reads in a row agree.
 const READ_ROUNDS: usize = 6;
 const VERIFY_ATTEMPTS: usize = 4;
+const SELECT_ATTEMPTS: usize = 5;
 
 impl<T: ReportIo> Settings for Session<T> {
     fn read_setting(&mut self, sub: u8) -> Result<u8> {
@@ -268,13 +315,29 @@ impl<T: ReportIo> Device for Session<T> {
             state["ui_header_hex"] = json!(hex::encode(&preset.header));
             state["bands"] = Value::Array(preset.bands.iter().map(|band| band.to_json()).collect());
             let reply = self.transact(&read_coefficients_command(slot)?, None)?;
-            state["saved_coefficients_hex"] = json!(hex::encode(parse_coefficients(&reply, slot)?));
+            state["saved_coefficients_hex"] = json!(parse_stored_coefficients(&reply, slot)?.map(hex::encode));
             state["raw_coefficient_response_hex"] = json!(hex::encode(&reply));
             if parse_index(&self.transact(&read_index_command(), None)?)? != index {
-                return Err(Error::value("Preset changed while taking the backup; retry read-only snapshot"));
+                return Err(Error::value("Preset changed while reading the headset; read it again"));
             }
         }
         Ok(state)
+    }
+
+    fn read_slot(&mut self, slot: u8) -> Result<Option<Vec<u8>>> {
+        parse_stored_coefficients(&self.transact(&read_coefficients_command(slot)?, None)?, slot)
+    }
+
+    /// Switch presets, then read the index back until the headset reports it.
+    fn select_preset(&mut self, index: u8) -> Result<Value> {
+        let ack = self.transact(&select_preset_command(index)?, None)?;
+        for attempt in 0..SELECT_ATTEMPTS {
+            (self.sleep)(Duration::from_millis(if attempt == 0 { 150 } else { 400 }));
+            if parse_index(&self.transact(&read_index_command(), None)?)? == index {
+                return Ok(object([("select_ack_hex", json!(hex::encode(&ack)))]));
+            }
+        }
+        Err(Error::other("The headset did not switch presets. Read it again to see which preset is active."))
     }
 
     fn has_storage_space(&mut self) -> Result<bool> {
@@ -285,9 +348,7 @@ impl<T: ReportIo> Device for Session<T> {
         let ack = self.transact(&save_coefficients_command(slot, coefficients)?, Some(8.0))?;
         let actual = parse_coefficients(&self.transact(&read_coefficients_command(slot)?, None)?, slot)?;
         if actual != coefficients {
-            return Err(Error::value(
-                "Saved coefficient read-back differs from the requested profile. Restore the saved backup.",
-            ));
+            return Err(Error::value("Saved coefficient read-back differs from the requested profile. Save it again."));
         }
         Ok(object([
             ("save_ack_hex", json!(hex::encode(&ack))),
@@ -296,7 +357,7 @@ impl<T: ReportIo> Device for Session<T> {
         ]))
     }
 
-    /// One live update; callers enforce a prior backup and filter validation.
+    /// One live update; callers enforce a custom preset and filter validation.
     fn apply_live(&mut self, coefficients: &[u8]) -> Result<Value> {
         let ack = self.transact(&live_command(coefficients)?, None)?;
         Ok(object([
@@ -320,7 +381,7 @@ pub mod hidapi_backend {
     use super::{BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
     use crate::balance::Settings;
     use crate::descriptor::report_sizes;
-    use crate::device::Device;
+    use crate::device::{Access, Device};
     use crate::{Error, Result};
     use hidapi::{HidApi, HidDevice};
 
@@ -377,8 +438,10 @@ pub mod hidapi_backend {
         Ok(Session::new(HidapiIo { device, input_size }, transport, interface, allow_live, allow_persistent))
     }
 
-    pub fn open(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Box<dyn Device>> {
-        Ok(Box::new(session(transport, allow_live, allow_persistent)?))
+    pub fn open(transport: Transport, access: Access) -> Result<Box<dyn Device>> {
+        let mut session = session(transport, access.live, access.persistent)?;
+        session.allow_select = access.select;
+        Ok(Box::new(session))
     }
 
     /// A session that can read settings and, with `allow_write`, change them. No EQ writes.
@@ -393,7 +456,7 @@ pub mod hidapi_backend {
 mod windows {
     use super::{BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
     use crate::balance::Settings;
-    use crate::device::Device;
+    use crate::device::{Access, Device};
     use crate::{Error, Result};
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -570,8 +633,10 @@ mod windows {
         Ok(Session::new(io, transport, interface, allow_live, allow_persistent))
     }
 
-    pub fn open(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Box<dyn Device>> {
-        Ok(Box::new(session(transport, allow_live, allow_persistent)?))
+    pub fn open(transport: Transport, access: Access) -> Result<Box<dyn Device>> {
+        let mut session = session(transport, access.live, access.persistent)?;
+        session.allow_select = access.select;
+        Ok(Box::new(session))
     }
 
     /// A session that can read settings and, with `allow_write`, change them. No EQ writes.

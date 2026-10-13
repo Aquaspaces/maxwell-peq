@@ -7,8 +7,6 @@ use std::fmt;
 pub enum Error {
     /// Bad input or a refused operation (Python `ValueError`).
     Value(String),
-    /// The headset's preset or interface no longer matches the backup.
-    StateChanged(String),
     /// A worker reported failure; the map is its full JSON result.
     Worker(Map<String, Value>),
     /// I/O, timeouts, and anything else (Python `OSError`/`RuntimeError`).
@@ -37,7 +35,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Value(m) | Error::StateChanged(m) | Error::Other(m) => f.write_str(m),
+            Error::Value(m) | Error::Other(m) => f.write_str(m),
             Error::Worker(result) => match result.get("error") {
                 Some(Value::String(m)) => f.write_str(m),
                 Some(other) => write!(f, "{other}"),

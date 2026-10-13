@@ -1,6 +1,6 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, and left/right channel balance. It runs on Windows and macOS.
+Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, saving profiles to the headset's four custom presets with exact readback, switching the active preset, and left/right channel balance. It runs on Windows and macOS.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -20,7 +20,7 @@ Run `MaxwellPEQ.exe`. It opens its own window (WebView2, built into Windows 10 a
 
 When the Audeze app is installed (`C:\Program Files\Audeze\AudezeApp`), the app builds peak and pass filters with its `AirohaPeqLibrary.dll`; the Audeze app itself must not be running. The DLL is never bundled. It is checked against the inspected SHA-256 before use; set `MAXWELL_PEQ_DLL` to use another copy, or place the DLL next to the exe. Without it, the built-in encoder is used instead (see [Coefficient paths](#coefficient-paths)).
 
-Profiles, backups and write records are kept in `%LOCALAPPDATA%\MaxwellPEQ` (set `MAXWELL_PEQ_DATA` to move them). Keep the `backups` folder: it holds the original preset used by Restore.
+Profiles and balance write logs are kept in `%LOCALAPPDATA%\MaxwellPEQ` (set `MAXWELL_PEQ_DATA` to move them). Older versions also kept preset backups and a `session.json` in a `backups` folder; this version ignores them, and you can delete the folder.
 
 ### Build
 
@@ -51,7 +51,7 @@ git push origin v0.2.0
 
 ### Python reference implementation
 
-The original Python version (`server.py`, `peq.py`, `device_worker.py` and friends) stays in the repository as the reference the Rust port is checked against. `python tools/make_golden.py` regenerates the fixtures in `crates/maxwell-core/tests/golden/`, and the Rust tests require exact floating-point equality with them. `python server.py` still serves the same editor at `http://127.0.0.1:8769` with no pip packages; source runs keep profiles and backups in the repository folder unless `MAXWELL_PEQ_DATA` is set. `./start.ps1` starts it in the background.
+The original Python version (`server.py`, `peq.py`, `device_worker.py` and friends) stays in the repository as the reference the Rust port is checked against. `python tools/make_golden.py` regenerates the fixtures in `crates/maxwell-core/tests/golden/`, and the Rust tests require exact floating-point equality with them. `python server.py` still serves the same editor at `http://127.0.0.1:8769` with no pip packages; source runs keep profiles and backups in the repository folder (the Python version still uses the older Apply, backup and Restore flow, so the editor's preset saves and switching only work in the Rust app) unless `MAXWELL_PEQ_DATA` is set. `./start.ps1` starts it in the background.
 
 ## Audeze App/HQ must be closed
 
@@ -59,7 +59,7 @@ The headset's control interface can only have one reader; the Audeze app and thi
 
 ## Profiles
 
-The sidebar holds named profiles. Click one, or press **Ctrl+1** to **Ctrl+9**, to switch. With **Apply live** on, switching plays the profile on the headset immediately, and every edit is sent as you make it. That change is temporary: the headset forgets it when it reloads a preset. **Save to headset…** writes the current profile into flash.
+The sidebar holds named profiles. Click one, or press **Ctrl+1** to **Ctrl+9**, to edit it. Editing never touches the headset; nothing is sent until you save a profile to one of its presets.
 
 Profiles save automatically to the computer. Each one has its own undo history (**Ctrl+Z**, **Ctrl+Y**). Use the **⋯** menu to rename, duplicate, export or delete one.
 
@@ -79,21 +79,23 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 
 ## Use the headset
 
-1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. Choose the matching connection in the device bar.
-2. In the Audeze app, select one of the four custom presets, then close the app (the editor offers to).
-3. Click **Connect & back up**. It saves the exact saved coefficients to the backups folder. Built-in presets are readable, but applying requires a custom preset.
-4. Edit. With **Apply live** on, each change plays as soon as it compiles; turn it off to use the **Apply** button instead. Start at low listening volume. An acknowledgement means the headset accepted the command; it is not an audio measurement.
-5. **Restore → Restore live EQ** plays the original preset again without changing headset storage.
+1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. The device bar's connection is **Automatic** by default: it uses USB-C when the cable is plugged in and the dongle otherwise. Choose USB-C or the dongle there to force one.
+2. Close the Audeze app (the editor offers to).
+3. The editor reads the headset when it opens; click **Read again** after changing presets or connections on the headset.
+4. Drag a profile from **Not on the headset** onto the box next to **Preset 1** to **Preset 4**, or use **Save to Preset N** in its **⋯** menu. Start at low listening volume.
+5. Click a preset's dot or name to make it active. You can also switch on the headset itself; read it again afterwards to update the editor.
 
-Temporary changes may be replaced when the device or official app reloads a preset. Backups capture saved coefficients, not any pre-existing unsaved live DSP state. The app verifies the device path, active preset, UI records and saved coefficient bytes again immediately before each apply or save. Preset selection and firmware flashing are not implemented.
+The headset's custom presets are indexes 7 to 10, which the Audeze app shows as Preset 1 to 4. The active one has a green dot, and the device bar names it. Built-in presets can be read but not written. Firmware flashing is not implemented.
 
-## Save to the headset
+## Save to a preset
 
-**Save to headset…** overwrites the active custom slot's four coefficient banks, reads them back byte for byte, then applies the same EQ live. **Restore → Restore saved preset** writes the original backup back to that slot, verifies it, and applies it. The sidebar marks the profile that is playing (**Live**) and the one in flash (**Saved**).
+Saving overwrites that preset's four coefficient banks and reads them back byte for byte. If the preset is the active one, the same EQ also plays right away; otherwise it plays the next time that preset becomes active. Switching presets sends only the switch, the same command the Audeze app uses, and the headset loads the preset's stored EQ itself.
 
-The Audeze app's ten slider records are left unchanged because they cannot describe these custom filters. Its sliders will show old values, and moving them can replace the saved EQ. The raw backup preserves the exact original sound but cannot reconstruct arbitrary filter settings; keep profiles or APO exports for editable copies.
+Each preset remembers which profile was saved to it and shows that profile next to it; profiles that are on no preset stay in the list below. If you edit the profile afterwards, the preset says **Edited since saving** with an **Update** button. A link is dropped when the headset reports different EQ in that preset, for example after the Audeze app rewrites it, or when a save starts but can't be verified.
 
-The app journals each write before sending it and recovers the session, connection and original backup after restart. If a write times out, further Apply/Save operations are blocked until restoration. Saved-profile recovery permits replacing an uncertain stored blob, while still checking the interface, custom slot and UI records. After sending EQ you can still switch between USB-C and the dongle: choose the connection and click **Read again**. The app reads the headset through it and checks that the preset number, slider records and saved coefficients match what it expects. If they do, it keeps the original backup and the live and saved states, and sends no EQ; if not, nothing changes. A save with an uncertain result has to be restored through its original connection first. Taking a new backup requires restoring the existing session.
+The Audeze app's ten slider records are left unchanged because they cannot describe these custom filters. Its sliders will show old values, and moving them can replace the saved EQ. Reselecting the preset in the Audeze app rewrites it from those sliders, which puts its own EQ back. Keep profiles or APO exports for editable copies of yours.
+
+Choosing another connection in the device bar reads the headset through it, and later writes use it. The status line shows which connection Automatic found.
 
 Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, exact 844-byte readback after powering the headset off/on with USB unplugged, and user-reported audible EQ retention during wireless playback. See [PROOF.md](PROOF.md). [examples/obvious-persistence.json](examples/obvious-persistence.json) contains the deliberately exaggerated two-cut test profile.
 
@@ -124,7 +126,7 @@ Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_D
 - Low/high-pass: second order (12 dB/octave asymptotic slope), Q 0.1-20. Gain is unused and must be 0. Q approximately 0.7071 gives the Butterworth response; larger Q adds resonance near the cutoff.
 - **Shelf and pass filters are still marked experimental:** numerical checks pass, and a rough measurement on the headset matched them from 300 Hz to 3 kHz (see [PROOF.md](PROOF.md)). Their bass and treble response has not been measured. The type selector and compiled result identify them.
 - Auto preamp subtracts the sum of each filter's maximum boost, including pass-filter resonance. Manual preamp must provide at least that much headroom; maximum attenuation is 60 dB.
-- Compilation checks pole stability and compares decoded quantized response against the RBJ reference. It rejects sampled errors over 0.15 dB. For shelf/pass sets, comparisons floor both curves at -90 dB to handle deep stopband nulls and also check DC/Nyquist and pass-filter resonance. Some low-frequency or high-Q combinations exceed the precision limit; the UI reports the failure instead of sending them.
+- Compilation checks pole stability and compares decoded quantized response against the RBJ reference. It rejects sampled errors over 0.5 dB (narrow sub-bass peaks come close at 88.2 and 96 kHz). For shelf/pass sets, comparisons floor both curves at -90 dB to handle deep stopband nulls and also check DC/Nyquist and pass-filter resonance. Some low-frequency or high-Q combinations exceed the precision limit; the UI reports the failure instead of sending them.
 - Banks: 44.1, 48, 88.2 and 96 kHz. Firmware version is not identified; USB device revision is not treated as firmware version.
 - The window talks to the app over Tauri IPC; `--serve` is loopback only with a per-process request token and same-origin checks. One device operation runs at a time. No telemetry or external assets.
 - Only one copy of the desktop app runs at a time, since two would share the headset interface.

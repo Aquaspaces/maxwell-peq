@@ -78,6 +78,37 @@ fn saved_coefficient_read() {
 }
 
 #[test]
+fn a_preset_that_was_never_saved_reads_as_none() {
+    let missing = response(0x0A0C, &unhex("052de4"));
+    assert_eq!(parse_stored_coefficients(&missing, 1).unwrap(), None);
+    assert!(parse_coefficients(&missing, 1).unwrap_err().to_string().contains("Preset 2 has no saved EQ"));
+    // A missing key that is not the one asked for is still a wrong reply.
+    assert!(parse_stored_coefficients(&missing, 2).is_err());
+}
+
+#[test]
+fn preset_select_matches_the_audeze_app() {
+    assert_eq!(hex(&select_preset_command(9).unwrap()), "055a05000009000009");
+    for index in [0, 6, 11] {
+        assert!(select_preset_command(index).is_err(), "{index}");
+    }
+    validate_select(&select_preset_command(7).unwrap()).unwrap();
+    for packet in
+        [unhex("055a05000009000003"), unhex("055a05000009290064"), write_setting_command(LEFT_GAIN, 100).unwrap()]
+    {
+        assert!(validate_select(&packet).is_err(), "{}", hex(&packet));
+    }
+    // Selecting is never part of the EQ allowlist.
+    assert!(validate_request(&select_preset_command(7).unwrap(), true, true).is_err());
+    parse_select_ack(&unhex("055b0500000900000a")).unwrap();
+    assert_eq!(
+        parse_select_ack(&unhex("055b0500000903000a")).unwrap_err().to_string(),
+        "Headset rejected the preset change (status 3)"
+    );
+    assert!(parse_select_ack(&unhex("055b0500000900290a")).is_err());
+}
+
+#[test]
 fn reassembly_split_and_multiple() {
     let packet = response(0x0A0C, &(0..200).map(|i| i as u8).collect::<Vec<_>>());
     let ack = response(0x0E03, &[0]);
@@ -280,6 +311,25 @@ fn transact_times_out_without_a_reply() {
     let error = session.transact(&read_index_command(), Some(0.1)).unwrap_err();
     assert!(matches!(error, Error::Other(_)));
     assert_eq!(error.to_string(), "No matching command response; live state may be uncertain");
+}
+
+#[test]
+fn select_waits_until_the_headset_reports_the_new_preset() {
+    use maxwell_core::device::Device;
+    let mut inputs = vec![empty(); 6];
+    inputs.extend(reports(&unhex("055b05000009000009")));
+    // The first read still shows the old preset; the next one has switched.
+    for index in [10, 9] {
+        inputs.extend(vec![empty(); 6]);
+        inputs.extend(reports(&response(0x0901, &[0, 0, 1, index])));
+    }
+    let mut session = session(Script::new(inputs, Some(empty())), Transport::Dongle, false);
+    assert!(session.select_preset(9).is_err(), "selecting needs its own permission");
+    session.allow_select = true;
+    let result = session.select_preset(9).unwrap();
+    assert_eq!(result["select_ack_hex"], "055b05000009000009");
+    assert_eq!(session.io.writes.len(), 3);
+    assert_eq!(hex(&session.io.writes[0][3..12]), "055a05000009000009");
 }
 
 #[cfg(windows)]

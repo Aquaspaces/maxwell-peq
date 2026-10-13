@@ -20,6 +20,7 @@
     <symbol id="i-undo" viewBox="0 0 20 20"><path d="M7.5 5 4 8.5 7.5 12M4.5 8.5h7a4 4 0 0 1 0 8H9"/></symbol>
     <symbol id="i-redo" viewBox="0 0 20 20"><path d="M12.5 5 16 8.5 12.5 12m3-3.5h-7a4 4 0 0 0 0 8H11"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></symbol>
+    <symbol id="i-link" viewBox="0 0 20 20"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9M11.5 8.5a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"/></symbol>
     <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.5 2.8 16h14.4L10 3.5ZM10 8.5v3.5M10 14.2v.1"/></symbol>
   </svg>
 
@@ -29,11 +30,16 @@
         <span class="brand-name">Maxwell PEQ</span>
         <span class="brand-device">Original Maxwell · PlayStation</span>
       </div>
-      <div class="sidebar-heading">
+      <section class="slots" id="slots" aria-labelledby="slots-heading" hidden>
+        <div class="sidebar-heading"><h2 id="slots-heading">On the headset</h2></div>
+        <ol class="slot-list" id="slot-list"></ol>
+      </section>
+      <div class="sidebar-heading pool-heading">
         <h2 id="profiles-heading">Profiles</h2>
         <button type="button" class="icon-button" id="new-profile" title="New profile" aria-label="New profile"><svg><use href="#i-plus"/></svg></button>
       </div>
       <ul class="profile-list" id="profile-list" aria-labelledby="profiles-heading"></ul>
+      <p class="slot-hint" id="slot-hint" hidden></p>
       <button type="button" class="sidebar-import" id="open-import"><svg><use href="#i-import"/></svg>Import Equalizer APO preset</button>
     </aside>
 
@@ -108,24 +114,10 @@
         <div class="device-controls">
           <label class="select-label" id="transport-wrap">
             <span class="sr-only">Connection</span>
-            <select id="transport"><option value="usb">USB-C cable</option><option value="dongle">Wireless dongle</option></select>
+            <select id="transport"><option value="auto">Automatic</option><option value="usb">USB-C cable</option><option value="dongle">Wireless dongle</option></select>
           </label>
-          <label class="switch" title="Send every change to the headset as you edit">
-            <input type="checkbox" id="auto-apply" checked>
-            <span class="switch-track" aria-hidden="true"></span>
-            <span>Apply live</span>
-          </label>
-          <button type="button" class="button primary" id="connect">Connect &amp; back up</button>
-          <button type="button" class="button" id="apply">Apply</button>
-          <button type="button" class="button" id="save-headset">Save to headset…</button>
+          <button type="button" class="button primary" id="connect">Read headset</button>
           <button type="button" class="button ghost" id="open-balance">Balance…</button>
-          <div class="menu-anchor">
-            <button type="button" class="button ghost" id="restore-menu-button" aria-haspopup="menu" aria-expanded="false">Restore<svg><use href="#i-chevron"/></svg></button>
-            <div class="menu up" id="restore-menu" role="menu" hidden>
-              <button type="button" role="menuitem" id="restore-live">Restore live EQ<small>Plays your original preset again. Headset storage is unchanged.</small></button>
-              <button type="button" role="menuitem" id="restore-saved">Restore saved preset<small>Writes your original preset back to the headset slot.</small></button>
-            </div>
-          </div>
         </div>
       </footer>
     </main>
@@ -138,6 +130,12 @@
     <button type="button" role="menuitem" data-action="rename">Rename</button>
     <button type="button" role="menuitem" data-action="duplicate">Duplicate</button>
     <button type="button" role="menuitem" data-action="export">Export APO…</button>
+    <div class="menu-separator" role="separator"></div>
+    <button type="button" role="menuitem" data-action="slot:0">Save to Preset 1</button>
+    <button type="button" role="menuitem" data-action="slot:1">Save to Preset 2</button>
+    <button type="button" role="menuitem" data-action="slot:2">Save to Preset 3</button>
+    <button type="button" role="menuitem" data-action="slot:3">Save to Preset 4</button>
+    <div class="menu-separator" role="separator"></div>
     <button type="button" role="menuitem" data-action="delete" class="danger">Delete</button>
   </div>
 
