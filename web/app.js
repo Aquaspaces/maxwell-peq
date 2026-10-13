@@ -461,7 +461,7 @@ function renderDevice() {
   $('status-dot').dataset.tone = view.tone;
   $('device-line').textContent = view.line;
   $('device-detail').textContent = view.detail;
-  const live = !!s.live_enabled, busy = !!state.busy, readable = s.storage_state === 'unchanged' && s.live_state !== 'uncertain';
+  const live = !!s.live_enabled, busy = !!state.busy, readable = s.storage_state !== 'uncertain';
   const blocked = !live || s.audeze_running;
   const current = state.compiled?.signature === sig && !problems().length;
   const uncertain = s.live_state === 'uncertain' || s.storage_state === 'uncertain';
@@ -472,7 +472,7 @@ function renderDevice() {
   $('connect').disabled = busy || blocked || !readable;
   $('connect').textContent = state.busy === 'connect' ? DEVICE_OPS.connect.label : s.backup_exists && !state.transportDirty ? 'Read again' : 'Connect & back up';
   $('connect').classList.toggle('primary', !s.backup_exists || state.transportDirty);
-  $('connect').title = readable ? '' : 'Restore the original preset before reading the headset again.';
+  $('connect').title = readable ? '' : 'Restore the saved preset through this connection before switching.';
   for (const id of ['apply', 'save-headset', 'restore-menu-button']) $(id).hidden = !live;
   $('apply').disabled = busy || !deviceReady() || !current || liveSignature() === sig;
   $('apply').textContent = state.busy === 'apply' ? DEVICE_OPS.apply.label : 'Apply';

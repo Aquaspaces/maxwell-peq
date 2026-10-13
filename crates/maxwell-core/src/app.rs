@@ -313,10 +313,16 @@ impl App {
     }
 
     fn read_device(&mut self, request: &Value) -> Result<Value> {
-        // Live EQ alone leaves saved storage, and so the backup, as it was; the
-        // headset can be read again, through either connection, to keep using it.
-        let keep_backup = self.live_state == "applied" && self.storage_state == UNCHANGED && !self.backup.is_null();
-        if !keep_backup && (self.live_state != UNCHANGED || self.storage_state != UNCHANGED) {
+        // Once EQ has been sent, reading again only switches or rebinds the
+        // connection: the headset must still hold what the session expects, and
+        // the original backup and live/saved states are kept. No EQ is sent.
+        let handoff = !self.backup.is_null() && (self.live_state != UNCHANGED || self.storage_state != UNCHANGED);
+        if handoff && self.storage_state == "uncertain" {
+            return Err(Error::value(
+                "Restore the uncertain saved profile through its current connection before switching.",
+            ));
+        }
+        if !handoff && (self.live_state != UNCHANGED || self.storage_state != UNCHANGED) {
             return Err(Error::value("Restore the existing backup before reading a new one."));
         }
         let transport = match get(request, "transport") {
@@ -325,28 +331,33 @@ impl App {
             Some(_) => return Err(Error::value("Choose USB-C or dongle.")),
         };
         let state = self.run(Worker::Device, &json!({"operation": "read", "transport": transport}))?;
-        if keep_backup {
-            let original = &self.backup["state"];
-            if get_or_null(&state, "slot") != get_or_null(original, "slot")
-                || get_or_null(&state, "saved_coefficients_hex") != get_or_null(original, "saved_coefficients_hex")
+        if handoff {
+            let expected = if self.expected.is_null() { &self.backup["state"] } else { &self.expected };
+            if ["index", "slot", "raw_ui_hex", "saved_coefficients_hex"]
+                .iter()
+                .any(|key| get_or_null(&state, key) != get_or_null(expected, key))
             {
                 return Err(Error::value(
-                    "The headset's saved preset no longer matches the backup. Nothing was changed; restore the backup first.",
+                    "This connection has a different preset or stored EQ. Your existing connection and original backup are unchanged.",
                 ));
             }
             let index = py_str(get_or_null(&state, "index"));
+            let previous = (self.transport.clone(), self.device.clone(), self.expected.clone());
             self.device = json!(format!(
                 "Original Maxwell PS · {} · preset {index}",
                 if transport == "usb" { "USB-C" } else { "dongle" }
             ));
             self.transport = transport;
             self.expected = state.clone();
-            self.persist()?;
+            if let Err(error) = self.persist() {
+                (self.transport, self.device, self.expected) = previous;
+                return Err(error);
+            }
             return Ok(object([
                 ("state", state),
                 ("backup_exists", json!(true)),
                 ("backup_path", self.backup_path.clone()),
-                ("message", json!("Headset read again. Its saved preset still matches the backup, which is kept.")),
+                ("message", json!("Connection verified. Your original backup is kept. No EQ was sent.")),
             ]));
         }
         let index = py_str(get_or_null(&state, "index"));

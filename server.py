@@ -306,12 +306,36 @@ class App:
                     backup_path=self.backup_path, hardware_audio_verified=False)
 
     def perform(self, path, request):
-        if path not in ('/api/read_device', '/api/apply', '/api/restore', '/api/save', '/api/restore_saved'):
+        if path not in ('/api/connect', '/api/read_device', '/api/apply', '/api/restore', '/api/save', '/api/restore_saved'):
             raise ValueError('Unknown endpoint.')
         if not self.enable_live:
             raise ValueError('Device controls are off because the app was started with --offline.')
         if self.audeze.running(fresh=True):
             raise ValueError('Audeze App/HQ is open. Custom PEQ will not work while it is open; close it first. No EQ was sent.')
+        if path == '/api/connect':
+            if self.backup is None:
+                return self.perform('/api/read_device', request)
+            transport = request.get('transport', self.transport)
+            if transport not in ('usb', 'dongle'):
+                raise ValueError('Choose USB-C or dongle.')
+            if self.storage_state == 'uncertain':
+                raise ValueError('Restore the uncertain saved profile through its current connection before switching.')
+            state = worker('device_worker.py', dict(operation='read', transport=transport))
+            expected = self.expected or self.backup['state']
+            if any(state.get(key) != expected.get(key) for key in
+                   ('index', 'slot', 'raw_ui_hex', 'saved_coefficients_hex')):
+                raise ValueError('This connection has a different preset or stored EQ. Your existing connection and original backup are unchanged.')
+            previous = (self.transport, self.device, self.expected)
+            self.transport = transport
+            self.device = f"Original Maxwell PS · {'USB-C' if transport == 'usb' else 'dongle'} · preset {state['index']}"
+            self.expected = copy.deepcopy(state)
+            try:
+                self._persist()
+            except Exception:
+                self.transport, self.device, self.expected = previous
+                raise
+            return dict(state=state, backup_exists=True, backup_path=self.backup_path,
+                        message='Connection verified. Your original backup is retained. No EQ was sent.')
         if path == '/api/read_device':
             if self.live_state != 'unchanged' or self.storage_state != 'unchanged':
                 raise ValueError('Restore the existing backup before reading a new one.')

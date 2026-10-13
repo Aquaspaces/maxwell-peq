@@ -107,45 +107,64 @@ mod recovery {
         assert!(!app.backup.is_null());
     }
 
+    /// A session that has saved EQ: the headset now holds something other than the backup.
+    fn saved_session(app: &mut App) -> Value {
+        let expected = json!({"index": 10, "slot": 0, "raw_ui_hex": "aa", "saved_coefficients_hex": "3344"});
+        app.expected = expected.clone();
+        (app.live_state, app.storage_state) = ("applied".into(), "saved".into());
+        expected
+    }
+
     #[test]
-    fn live_eq_can_switch_connection_and_keep_the_backup() {
+    fn saved_session_can_switch_connection_and_keep_the_backup() {
         let (mut app, fake, snapshot) = setup();
-        app.live_state = "applied".into();
-        let read = json!({"saved_coefficients_hex": "1122", "slot": 0, "index": 4});
+        let mut read = saved_session(&mut app);
+        read["device"] = json!({"path": "dongle-new", "transport": "dongle"});
         fake.ok(read.clone());
         app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap();
         assert_eq!(fake.calls(), vec![(Worker::Device, json!({"operation": "read", "transport": "dongle"}))]);
         assert_eq!(app.transport, "dongle");
-        assert_eq!(app.live_state, "applied");
+        assert_eq!((app.live_state.as_str(), app.storage_state.as_str()), ("applied", "saved"));
         assert_eq!(app.backup, json!({"state": snapshot}));
         assert_eq!(app.backup_path, json!("test-backup.json"));
         assert_eq!(app.expected, read);
 
         fake.ok(json!({}));
         app.perform("/api/restore", &json!({})).unwrap();
-        assert_eq!(fake.calls()[0].1["transport"], "dongle");
+        let (_, request) = &fake.calls()[0];
+        assert_eq!(request["transport"], "dongle");
+        assert_eq!(request["expected"]["device"]["path"], "dongle-new");
+        assert_eq!(request["blob_hex"], "1122");
     }
 
     #[test]
-    fn live_eq_read_refuses_a_changed_saved_preset() {
-        let (mut app, fake, snapshot) = setup();
-        app.live_state = "applied".into();
-        fake.ok(json!({"saved_coefficients_hex": "9999", "slot": 0, "index": 4}));
-        let error = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap_err();
-        assert!(error.to_string().contains("no longer matches"), "{error}");
-        assert_eq!(app.transport, "usb");
-        assert_eq!(app.backup, json!({"state": snapshot}));
-    }
-
-    #[test]
-    fn saved_or_uncertain_state_still_blocks_reading() {
-        for (live, storage) in [("applied", "saved"), ("uncertain", "unchanged"), ("unchanged", "uncertain")] {
-            let (mut app, fake, _) = setup();
-            (app.live_state, app.storage_state) = (live.into(), storage.into());
+    fn a_different_preset_or_a_failed_read_keeps_the_session() {
+        for field in ["index", "slot", "raw_ui_hex", "saved_coefficients_hex"] {
+            let (mut app, fake, snapshot) = setup();
+            let mut read = saved_session(&mut app);
+            read[field] = json!(9);
+            fake.ok(read);
             let error = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap_err();
-            assert!(error.to_string().contains("Restore the existing backup"), "{error}");
-            assert!(fake.calls().is_empty());
+            assert!(error.to_string().contains("different preset"), "{field}: {error}");
+            assert_eq!(app.transport, "usb");
+            assert_eq!(app.backup, json!({"state": snapshot}));
+            assert_eq!(app.storage_state, "saved");
         }
+        let (mut app, fake, _) = setup();
+        let expected = saved_session(&mut app);
+        fake.err(Error::other("Disconnected"));
+        assert!(app.perform("/api/read_device", &json!({"transport": "dongle"})).is_err());
+        assert_eq!((app.transport.as_str(), &app.expected), ("usb", &expected));
+    }
+
+    #[test]
+    fn uncertain_storage_blocks_switching_without_reading() {
+        let (mut app, fake, _) = setup();
+        saved_session(&mut app);
+        app.storage_state = "uncertain".into();
+        let error = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap_err();
+        assert!(error.to_string().contains("uncertain"), "{error}");
+        assert!(fake.calls().is_empty());
     }
 
     #[test]

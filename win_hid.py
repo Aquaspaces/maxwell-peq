@@ -121,8 +121,12 @@ class MaxwellPsHid:
                     self.close_handle(probe)
         finally:
             destroy(devices)
-        if len(candidates) != 1:
-            raise OSError(f"Expected one original Maxwell PlayStation {transport} interface, found {len(candidates)}")
+        if not candidates:
+            raise OSError('PlayStation dongle not found. Plug in the dongle and keep the headset powered on and paired.'
+                          if transport == 'dongle' else
+                          'Headset USB connection not found. Connect the headset with a USB data cable, or select Wireless dongle.')
+        if len(candidates) > 1:
+            raise OSError('More than one matching Maxwell control interface is connected. Disconnect the extra device and retry.')
         self.path, self.input_size, self.output_size, self.device_version = candidates[0]
         self._open_control()
 
