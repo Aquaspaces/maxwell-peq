@@ -102,6 +102,34 @@ pub fn write_setting_command(sub: u8, value: u8) -> Result<Vec<u8>> {
     packet(0x0900, &[sub, 0, value])
 }
 
+/// Voice-prompt level. Audeze HQ 1.2.48 mutes it around a Maxwell 2 USB
+/// preset reselect (static analysis only; untested on hardware).
+pub const VOICE_PROMPT_LEVEL: u8 = 0x20;
+
+pub fn read_voice_prompt_command() -> Vec<u8> {
+    setting_read_command(VOICE_PROMPT_LEVEL)
+}
+
+pub fn write_voice_prompt_command(level: u8) -> Result<Vec<u8>> {
+    packet(0x0900, &[VOICE_PROMPT_LEVEL, 0, level])
+}
+
+/// Select a custom preset (index 7..10). HQ sends this after a Maxwell 2 USB
+/// save so the headset reloads the saved coefficients.
+pub fn select_preset_command(index: u8) -> Result<Vec<u8>> {
+    if !(7..=10).contains(&index) {
+        return Err(error("Only custom presets 7..10 can be reselected"));
+    }
+    packet(0x0900, &[0, 0, index])
+}
+
+/// The Maxwell 2 reselect sequence, allowed only with the save capability.
+fn is_reselect_request(packet: &[u8]) -> bool {
+    packet == read_voice_prompt_command()
+        || matches!(check_packet(packet, 0x5A), Ok((0x0900, [VOICE_PROMPT_LEVEL, 0, _])))
+        || matches!(check_packet(packet, 0x5A), Ok((0x0900, [0, 0, 7..=10])))
+}
+
 /// Opt-in writes: channel gains and the source profile, nothing else.
 pub fn validate_setting_write(packet: &[u8]) -> Result<()> {
     let (command, payload) = check_packet(packet, 0x5A)?;
@@ -170,6 +198,9 @@ pub fn validate_request(packet: &[u8], allow_live: bool, allow_persistent: bool)
         && payload.len() == SAVED_BYTES + 2
         && (COEFFICIENT_KEY..=COEFFICIENT_KEY + 3).contains(&le16(payload, 0))
     {
+        return Ok(());
+    }
+    if allow_persistent && is_reselect_request(packet) {
         return Ok(());
     }
     Err(error("Command is outside the EQ allowlist"))

@@ -13,4 +13,4 @@ The Mac build isn't signed by Apple. The first time you open it, macOS blocks it
 
 The Mac build has every feature. It always uses Maxwell PEQ's own filter encoder, because the Audeze library only exists on Windows. EQ, restore and balance have been tested on a Mac over USB-C, and saving to the headset over the dongle.
 
-Headset support covers the original Audeze Maxwell (PlayStation), over USB-C or the dongle.
+Tested on the original Audeze Maxwell (PlayStation), over USB-C or the dongle. Maxwell 2 is supported but untested. Maxwell 2 ANC is not supported.
