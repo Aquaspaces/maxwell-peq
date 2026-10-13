@@ -2,7 +2,7 @@
 //! test_extended_filters.py and test_filter_compilation.py; exact outputs are
 //! pinned by golden.rs.
 
-use maxwell_core::compile::{compile_preset, validate};
+use maxwell_core::compile::{Encoder, compile_preset, compile_with, validate};
 use maxwell_core::dsp::{Filter, Kind, RATES, SHELF_Q, biquad, decode_words, filter_headroom_db, rbj_biquad, response};
 use maxwell_core::encoder::encode_bank;
 use maxwell_core::vendor;
@@ -55,11 +55,16 @@ fn invalid_values() {
     }
 }
 
+/// Auto preamp is the combined curve's peak, not the sum of the boosts (+10 dB here).
 #[test]
-fn headroom_bound() {
+fn headroom_is_the_curve_peak() {
     let request = json!({"filters": [{"frequency": 1000, "gain": 6, "q": 1}, {"frequency": 3000, "gain": 4, "q": 2},
                                      {"frequency": 500, "gain": -3, "q": 1}]});
-    assert_eq!(validate(&request).unwrap().1, -10.0);
+    assert_eq!(validate(&request).unwrap().1, -5.27);
+    assert_eq!(validate(&json!({"filters": [{"frequency": 1000, "gain": -6, "q": 1}]})).unwrap().1, 0.0);
+    let manual = |preamp: f64| validate(&json!({"filters": request["filters"], "preamp": preamp}));
+    assert!(manual(-5.27).is_ok());
+    assert_eq!(manual(-5.2).unwrap_err().to_string(), "Use Auto preamp or -5.27 dB or lower for these boosts.");
 }
 
 #[test]
@@ -74,7 +79,8 @@ fn legacy_peak_and_shelf_defaults() {
 fn resonant_pass_filters_require_headroom() {
     let f = row_json("high_pass", 1000.0, 0.0, 4.0);
     let (filters, preamp) = validate(&json!({"filters": [f]})).unwrap();
-    assert!(close(preamp, -filter_headroom_db(&filters[0]), 7));
+    let bound = filter_headroom_db(&filters[0]);
+    assert!(preamp <= -bound && preamp > -bound - 0.011, "{preamp} for a {bound} dB resonance");
     assert!(preamp < -12.0);
     assert!(validate(&json!({"filters": [f], "preamp": 0})).is_err());
 }
@@ -261,8 +267,54 @@ fn precision_guards() {
         return;
     }
     let shelf = json!({"filters": [row_json("low_shelf", 30.0, -6.0, SHELF_Q)]});
-    let error = compile_preset(&shelf).unwrap_err().to_string();
+    let error = compile_with(&shelf, Encoder::Auto).unwrap_err().to_string();
     assert!(error.contains("precision error"), "{error}");
+}
+
+/// Banks that can't be encoded precisely get the nearest values that can, and
+/// only at the rates that need them.
+#[test]
+fn imprecise_banks_use_the_nearest_values() {
+    if !vendor_available() {
+        return;
+    }
+    let shelf = json!({"filters": [row_json("low_shelf", 30.0, -6.0, SHELF_Q)]});
+    let result = compile_preset(&shelf).unwrap();
+    assert!(result["max_error_db"].as_f64().unwrap() <= 0.5);
+    let adjustments = result["adjustments"].as_array().unwrap();
+    assert!(!adjustments.is_empty());
+    for change in adjustments {
+        assert_eq!(change["field"], "frequency", "{change}");
+        assert!(change["to"].as_f64().unwrap() > 30.0 && change["to"].as_f64().unwrap() < 40.0, "{change}");
+    }
+    assert_eq!(result["filters"][0]["frequency"], 30.0, "the request itself is unchanged");
+
+    // A 20 Hz peak that only the 88.2 and 96 kHz banks can't hold.
+    let mut filters = vec![json!({"frequency": 20, "gain": -6, "q": 2})];
+    filters.push(json!({"frequency": 1000, "gain": 2, "q": 1}));
+    let request = json!({"filters": filters});
+    assert!(compile_with(&request, Encoder::Auto).is_err());
+    let result = compile_preset(&request).unwrap();
+    let rates: Vec<u64> =
+        result["adjustments"].as_array().unwrap().iter().map(|c| c["rate"].as_u64().unwrap()).collect();
+    assert!(!rates.is_empty() && rates.iter().all(|&rate| rate >= 88200), "{rates:?}");
+    // Precise sets come back exactly as the strict compiler builds them.
+    let clean = preset(1000.0, -3.0, 1.0);
+    assert_eq!(compile_preset(&clean).unwrap()["adjustments"], json!([]));
+    assert_eq!(compile_preset(&clean).unwrap()["blob_hex"], compile_with(&clean, Encoder::Auto).unwrap()["blob_hex"]);
+}
+
+/// Quantization can lift a boost past the ideal peak; Auto preamp absorbs it.
+#[test]
+fn auto_preamp_covers_quantization() {
+    if !vendor_available() {
+        return;
+    }
+    let request = preset(20.0, 4.4, 2.0);
+    let result = compile_preset(&request).unwrap();
+    let peak = result["curves"].as_array().unwrap().iter().flat_map(|c| c["points"].as_array().unwrap().clone());
+    assert!(peak.map(|p| p[1].as_f64().unwrap()).fold(f64::MIN, f64::max) <= 0.15);
+    assert!(result["preamp"].as_f64().unwrap() <= -4.4);
 }
 
 /// An AutoEQ-style set whose 20 Hz peak is 0.48 dB off at 96 kHz.

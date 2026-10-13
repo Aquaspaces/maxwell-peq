@@ -18,11 +18,12 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 peq.validate(request)
 
-    def test_headroom_bound(self):
+    def test_headroom_is_the_curve_peak(self):
+        # Boosts at different frequencies don't stack: +5.27 dB, not the +10 dB sum.
         request = dict(filters=[dict(frequency=1000, gain=6, q=1),
                                dict(frequency=3000, gain=4, q=2),
                                dict(frequency=500, gain=-3, q=1)])
-        self.assertEqual(peq.validate(request)[1], -10)
+        self.assertEqual(peq.validate(request)[1], -5.27)
 
     def test_independent_peak_properties(self):
         for fs in (44100, 48000, 88200, 96000):
@@ -85,8 +86,7 @@ class VendorTests(unittest.TestCase):
 
     def test_low_frequency_precision_guard(self):
         with self.assertRaisesRegex(ValueError, 'precision error'):
-            peq.compile_preset(dict(filters=[dict(frequency=f, gain=-2, q=1.2) for f in
-                                            (40, 80, 150, 300, 600, 1200, 2400, 4800, 9600, 16000)]))
+            peq.compile_preset(dict(filters=[dict(frequency=20, gain=-6, q=2)]))
 
 
 if __name__ == '__main__':
