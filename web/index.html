@@ -118,6 +118,7 @@
           <button type="button" class="button primary" id="connect">Connect &amp; back up</button>
           <button type="button" class="button" id="apply">Apply</button>
           <button type="button" class="button" id="save-headset">Save to headset…</button>
+          <button type="button" class="button ghost" id="open-headset">Headset…</button>
           <button type="button" class="button ghost" id="open-balance">Balance…</button>
           <div class="menu-anchor">
             <button type="button" class="button ghost" id="restore-menu-button" aria-haspopup="menu" aria-expanded="false">Restore<svg><use href="#i-chevron"/></svg></button>
@@ -217,6 +218,84 @@
         </section>
       </div>
       <footer class="balance-credit">Balance protocol from kats1123's maxwell-firmware-research (CC BY 4.0) and maxwell-balance-and-firmware-tool (MIT).</footer>
+    </form>
+  </dialog>
+
+  <dialog id="headset-dialog" class="dialog headset" aria-labelledby="headset-title">
+    <form method="dialog" id="headset-form" novalidate>
+      <header class="dialog-header">
+        <h2 id="headset-title">Headset</h2>
+        <button type="button" class="icon-button" data-close aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      </header>
+      <div class="headset-body">
+        <dl class="headset-facts">
+          <div><dt>Battery</dt><dd id="hs-battery">—</dd></div>
+          <div><dt>Microphone</dt><dd id="hs-mic">—</dd></div>
+          <div><dt>Firmware</dt><dd id="hs-firmware">—</dd></div>
+        </dl>
+
+        <section class="headset-section" aria-labelledby="hs-preset-title">
+          <h3 id="hs-preset-title">Onboard preset</h3>
+          <div class="headset-row">
+            <label for="hs-preset">Preset</label>
+            <select id="hs-preset" disabled><optgroup label="Built-in"><option value="1">Audeze</option><option value="2">Treble Boost</option><option value="3">Bass Boost</option><option value="4">Immersive</option><option value="5">Competition</option><option value="6">Footsteps</option></optgroup><optgroup label="Custom"><option value="7">EQ 1</option><option value="8">EQ 2</option><option value="9">EQ 3</option><option value="10">EQ 4</option></optgroup></select>
+          </div>
+          <p class="headset-note" id="hs-preset-note"></p>
+        </section>
+
+        <section class="headset-section" aria-labelledby="hs-sound-title">
+          <h3 id="hs-sound-title">Sound</h3>
+          <div class="headset-row">
+            <label for="hs-chat-mix">Game / chat mix</label>
+            <div class="headset-range mix">
+              <span aria-hidden="true">Game</span>
+              <input type="range" id="hs-chat-mix" min="0" max="20" step="1" disabled>
+              <span aria-hidden="true">Chat</span>
+            </div>
+            <output id="hs-chat-mix-value" for="hs-chat-mix">—</output>
+          </div>
+          <div class="headset-row">
+            <span id="hs-limiter-label">Volume limiter</span>
+            <label class="switch"><input type="checkbox" id="hs-limiter" aria-labelledby="hs-limiter-label" disabled><span class="switch-track" aria-hidden="true"></span></label>
+          </div>
+          <div class="headset-row">
+            <span id="hs-sidetone-label">Sidetone</span>
+            <label class="switch"><input type="checkbox" id="hs-sidetone" aria-labelledby="hs-sidetone-label" disabled><span class="switch-track" aria-hidden="true"></span></label>
+          </div>
+          <div class="headset-row">
+            <label for="hs-sidetone-level">Sidetone level</label>
+            <div class="headset-range"><input type="range" id="hs-sidetone-level" min="0" max="100" step="1" disabled></div>
+            <output id="hs-sidetone-level-value" for="hs-sidetone-level">—</output>
+          </div>
+          <div class="headset-row">
+            <span id="hs-noise-label">Noise suppression</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="hs-noise-label">
+              <label><input type="radio" name="hs-noise" value="0" disabled><span>Off</span></label>
+              <label><input type="radio" name="hs-noise" value="1" disabled><span>Low</span></label>
+              <label><input type="radio" name="hs-noise" value="2" disabled><span>High</span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="headset-section" aria-labelledby="hs-device-title">
+          <h3 id="hs-device-title">Device</h3>
+          <div class="headset-row">
+            <label for="hs-auto-off">Auto shutdown</label>
+            <select id="hs-auto-off" disabled><option value="300">5 min</option><option value="600">10 min</option><option value="900">15 min</option><option value="1800">30 min</option><option value="2700">45 min</option><option value="3600">1 hr</option><option value="5400">1.5 hr</option><option value="7200">2 hr</option><option value="14400">4 hr</option><option value="21600">6 hr</option><option value="0">Never</option></select>
+          </div>
+          <div class="headset-row">
+            <label for="hs-voice-prompt">Voice prompt volume</label>
+            <div class="headset-range"><input type="range" id="hs-voice-prompt" min="0" max="15" step="1" disabled></div>
+            <output id="hs-voice-prompt-value" for="hs-voice-prompt">—</output>
+          </div>
+        </section>
+
+        <p class="balance-status" id="headset-status" role="status" aria-live="polite"></p>
+        <div class="headset-actions">
+          <p class="headset-hint">Decoded from Audeze HQ and not yet tested on a headset. Each change is sent at once, then read back.</p>
+          <button type="button" class="button ghost" id="headset-read">Read headset</button>
+        </div>
+      </div>
     </form>
   </dialog>
 
