@@ -11,11 +11,12 @@ use crate::controls::Controls;
 use crate::device::Device;
 use crate::json::object;
 use crate::protocol::{
-    InputStream, battery_command, check_packet, control_matches, firmware_command, frame, live_command, parse_battery,
-    parse_coefficients, parse_control, parse_firmware, parse_index, parse_live_ack, parse_query_ack, parse_save_ack,
-    parse_setting, parse_storage_space, parse_ui, read_coefficients_command, read_control_command, read_index_command,
-    read_setting_command, read_ui_command, save_coefficients_command, storage_space_command, validate_control,
-    validate_request, validate_setting_write, write_control_command, write_setting_command,
+    InputStream, VOICE_PROMPT, battery_command, check_packet, control_matches, firmware_command, frame, live_command,
+    parse_battery, parse_coefficients, parse_control, parse_firmware, parse_index, parse_live_ack, parse_query_ack,
+    parse_save_ack, parse_setting, parse_storage_space, parse_ui, read_coefficients_command, read_control_command,
+    read_index_command, read_setting_command, read_ui_command, read_voice_prompt_command, save_coefficients_command,
+    select_preset_command, storage_space_command, validate_control, validate_request, validate_setting_write,
+    write_control_command, write_setting_command, write_voice_prompt_command,
 };
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -49,13 +50,72 @@ impl Transport {
             Transport::Dongle => "dongle",
         }
     }
+}
 
-    pub fn product_id(self) -> u16 {
+/// Headset models this app talks to. Only the original Maxwell PlayStation is
+/// tested; Maxwell 2 support follows Audeze HQ 1.2.48 and is untested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Model {
+    Maxwell,
+    Maxwell2,
+}
+
+impl Model {
+    pub fn name(self) -> &'static str {
         match self {
-            Transport::Usb => 0x4B1A,
-            Transport::Dongle => 0x4B19,
+            Model::Maxwell => "maxwell",
+            Model::Maxwell2 => "maxwell2",
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Model::Maxwell => "Original Maxwell PS",
+            Model::Maxwell2 => "Maxwell 2 (untested)",
+        }
+    }
+}
+
+/// `(product ID, model, transport)`. Maxwell 2 IDs come from HQ's
+/// `GetDevType`/`IsDongle`; 0x4B2A as its USB headset is inferred.
+pub const PRODUCTS: [(u16, Model, Transport); 5] = [
+    (0x4B1A, Model::Maxwell, Transport::Usb),
+    (0x4B19, Model::Maxwell, Transport::Dongle),
+    (0x4B2A, Model::Maxwell2, Transport::Usb),
+    (0x4B28, Model::Maxwell2, Transport::Dongle),
+    (0x4B29, Model::Maxwell2, Transport::Dongle),
+];
+
+/// Maxwell 2 ANC stores EQ differently in HQ and is unknown here.
+pub fn is_maxwell2_anc(product_id: u16) -> bool {
+    (0x4BA8..=0x4BAF).contains(&product_id)
+}
+
+pub fn product(product_id: u16) -> Option<(Model, Transport)> {
+    PRODUCTS.iter().find(|(id, ..)| *id == product_id).map(|&(_, model, transport)| (model, transport))
+}
+
+/// Pick the one supported control interface for `transport` from
+/// `(product ID, interface)` pairs with the vendor ID and usage page.
+pub fn select<T>(found: Vec<(u16, T)>, transport: Transport) -> Result<(Model, u16, T)> {
+    let anc = found.iter().any(|(id, _)| is_maxwell2_anc(*id));
+    let mut matching: Vec<_> = found
+        .into_iter()
+        .filter_map(|(id, item)| product(id).filter(|p| p.1 == transport).map(|(model, _)| (model, id, item)))
+        .collect();
+    if matching.is_empty() && anc {
+        return Err(Error::other(
+            "This looks like a Maxwell 2 ANC. Its EQ storage is unknown and unsupported here. No EQ was sent.",
+        ));
+    }
+    if matching.len() != 1 {
+        return Err(Error::other(format!(
+            "Expected one Maxwell {} control interface, found {}",
+            transport.name(),
+            matching.len()
+        )));
+    }
+    Ok(matching.remove(0))
 }
 
 /// Raw report I/O on one opened collection.
@@ -77,6 +137,8 @@ pub struct Interface {
 pub struct Session<T: ReportIo> {
     pub io: T,
     pub transport: Transport,
+    pub model: Model,
+    pub product_id: u16,
     pub interface: Interface,
     pub allow_live: bool,
     pub allow_persistent: bool,
@@ -93,6 +155,8 @@ impl<T: ReportIo> Session<T> {
         Session {
             io,
             transport,
+            model: Model::Maxwell,
+            product_id: PRODUCTS.iter().find(|p| p.1 == Model::Maxwell && p.2 == transport).map_or(0, |p| p.0),
             interface,
             allow_live,
             allow_persistent,
@@ -248,19 +312,12 @@ impl<T: ReportIo> Session<T> {
         }
         Ok(message)
     }
-}
 
-/// Reads right after a write can return a stale value, so a setting counts
-/// only when two reads in a row agree.
-const READ_ROUNDS: usize = 6;
-const VERIFY_ATTEMPTS: usize = 4;
-
-impl<T: ReportIo> Settings for Session<T> {
-    fn read_setting(&mut self, sub: u8) -> Result<u8> {
-        let packet = read_setting_command(sub)?;
+    /// A 0x0901 value, counted only when two reads in a row agree.
+    fn read_stable(&mut self, packet: &[u8], sub: u8) -> Result<u8> {
         let mut previous = None;
         for _ in 0..READ_ROUNDS {
-            let value = parse_setting(&self.transact(&packet, None)?, sub)?;
+            let value = parse_setting(&self.transact(packet, None)?, sub)?;
             if previous == Some(value) {
                 return Ok(value);
             }
@@ -270,14 +327,45 @@ impl<T: ReportIo> Settings for Session<T> {
         Err(Error::other("The headset kept returning different values. Try reading again."))
     }
 
+    /// Send a 0x0900 write. Its reply format is undocumented; keep it for diagnosis only.
+    fn write_0900(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.send(packet)?;
+        self.reply(packet, 1.0)
+    }
+
+    /// Audeze HQ's Maxwell 2 USB step after a save: mute voice prompts,
+    /// reselect the current preset, wait one second, restore the prompts.
+    fn reselect(&mut self, index: u8) -> Result<()> {
+        let level = self.read_stable(&read_voice_prompt_command(), VOICE_PROMPT)?;
+        self.write_0900(&write_voice_prompt_command(0)?)?;
+        let reselected = self.write_0900(&select_preset_command(index)?).map(|_| (self.sleep)(Duration::from_secs(1)));
+        // Restore the prompt level even when the reselect failed.
+        let restored = self.write_0900(&write_voice_prompt_command(level)?);
+        reselected?;
+        restored?;
+        if parse_index(&self.transact(&read_index_command(), None)?)? != index {
+            return Err(Error::other("The headset did not return to the custom preset after reloading it."));
+        }
+        Ok(())
+    }
+}
+
+/// Reads right after a write can return a stale value, so a setting counts
+/// only when two reads in a row agree.
+const READ_ROUNDS: usize = 6;
+const VERIFY_ATTEMPTS: usize = 4;
+
+impl<T: ReportIo> Settings for Session<T> {
+    fn read_setting(&mut self, sub: u8) -> Result<u8> {
+        self.read_stable(&read_setting_command(sub)?, sub)
+    }
+
     fn write_setting(&mut self, sub: u8, value: u8) -> Result<Option<Vec<u8>>> {
         let packet = write_setting_command(sub, value)?;
         if !self.allow_settings {
             return Err(Error::value("Settings writes are not enabled for this session"));
         }
-        self.send(&packet)?;
-        // The 0x0900 reply format is undocumented; keep it for diagnosis only.
-        let reply = self.reply(&packet, 1.0)?;
+        let reply = self.write_0900(&packet)?;
         for attempt in 0..VERIFY_ATTEMPTS {
             (self.sleep)(Duration::from_millis(if attempt == 0 { 300 } else { 600 }));
             if self.read_setting(sub)? == value {
@@ -358,7 +446,9 @@ impl<T: ReportIo> Device for Session<T> {
                 "device",
                 object([
                     ("vid", json!(VENDOR_ID)),
-                    ("pid", json!(self.transport.product_id())),
+                    ("pid", json!(self.product_id)),
+                    ("model", json!(self.model.name())),
+                    ("model_label", json!(self.model.label())),
                     ("usage_page", json!(USAGE_PAGE)),
                     ("transport", json!(self.transport.name())),
                     ("path", json!(interface.path)),
@@ -419,6 +509,32 @@ impl<T: ReportIo> Device for Session<T> {
             ("persistence_write_sent", json!(false)),
         ]))
     }
+
+    fn reload_saved(&mut self, index: u8) -> Result<bool> {
+        if self.model != Model::Maxwell2 || self.transport != Transport::Usb {
+            return Ok(false);
+        }
+        self.reselect(index)?;
+        Ok(true)
+    }
+}
+
+/// Settings subcommands were analyzed only on the original Maxwell.
+pub fn check_settings_model(model: Model) -> Result<()> {
+    if model != Model::Maxwell {
+        return Err(Error::other(
+            "Channel balance and source profile are only supported on the original Maxwell. Nothing was changed.",
+        ));
+    }
+    Ok(())
+}
+
+/// The headset controls were decoded for the original Maxwell only.
+pub fn check_controls_model(model: Model) -> Result<()> {
+    if model != Model::Maxwell {
+        return Err(Error::other("Headset controls are only supported on the original Maxwell. Nothing was changed."));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -431,7 +547,10 @@ pub use hidapi_backend::{open, open_controls, open_settings};
 /// can be checked there; Windows itself uses the native module below.
 #[cfg(any(not(windows), feature = "hidapi"))]
 pub mod hidapi_backend {
-    use super::{BUSY, Interface, LINUX_PERMISSION, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
+    use super::{
+        BUSY, Interface, LINUX_PERMISSION, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID, check_controls_model,
+        check_settings_model, select,
+    };
     use crate::balance::Settings;
     use crate::controls::Controls;
     use crate::descriptor::report_sizes;
@@ -474,20 +593,10 @@ pub mod hidapi_backend {
         let api = HidApi::new().map_err(|error| Error::other(format!("Could not start HID access: {error}")))?;
         let found: Vec<_> = api
             .device_list()
-            .filter(|info| {
-                info.vendor_id() == VENDOR_ID
-                    && info.product_id() == transport.product_id()
-                    && info.usage_page() == USAGE_PAGE
-            })
+            .filter(|info| info.vendor_id() == VENDOR_ID && info.usage_page() == USAGE_PAGE)
+            .map(|info| (info.product_id(), info))
             .collect();
-        if found.len() != 1 {
-            return Err(Error::other(format!(
-                "Expected one original Maxwell PlayStation {} interface, found {}",
-                transport.name(),
-                found.len()
-            )));
-        }
-        let info = found[0];
+        let (model, product_id, info) = select(found, transport)?;
         let device = info.open_device(&api).map_err(|_| Error::other(open_failure(info.path())))?;
         let mut descriptor = vec![0u8; 4096];
         let length = device.get_report_descriptor(&mut descriptor).map_err(|error| Error::other(error.to_string()))?;
@@ -500,7 +609,10 @@ pub mod hidapi_backend {
             output_size,
             device_version: info.release_number(),
         };
-        Ok(Session::new(HidapiIo { device, input_size }, transport, interface, allow_live, allow_persistent))
+        let mut session =
+            Session::new(HidapiIo { device, input_size }, transport, interface, allow_live, allow_persistent);
+        (session.model, session.product_id) = (model, product_id);
+        Ok(session)
     }
 
     pub fn open(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Box<dyn Device>> {
@@ -510,6 +622,7 @@ pub mod hidapi_backend {
     /// A session that can read settings and, with `allow_write`, change them. No EQ writes.
     pub fn open_settings(transport: Transport, allow_write: bool) -> Result<Box<dyn Settings>> {
         let mut session = session(transport, false, false)?;
+        check_settings_model(session.model)?;
         session.allow_settings = allow_write;
         Ok(Box::new(session))
     }
@@ -517,6 +630,7 @@ pub mod hidapi_backend {
     /// A session that can read controls and, with `allow_write`, change them. No EQ writes.
     pub fn open_controls(transport: Transport, allow_write: bool) -> Result<Box<dyn Controls>> {
         let mut session = session(transport, false, false)?;
+        check_controls_model(session.model)?;
         session.allow_controls = allow_write;
         Ok(Box::new(session))
     }
@@ -524,7 +638,10 @@ pub mod hidapi_backend {
 
 #[cfg(windows)]
 mod windows {
-    use super::{BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
+    use super::{
+        BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID, check_controls_model,
+        check_settings_model, select,
+    };
     use crate::balance::Settings;
     use crate::controls::Controls;
     use crate::device::Device;
@@ -605,14 +722,13 @@ mod windows {
         }
     }
 
-    fn probe(path: &str, product_id: u16) -> Option<Interface> {
+    /// The product ID and layout of a vendor control collection.
+    fn probe(path: &str) -> Option<(u16, Interface)> {
         let handle = create_file(path, 0, 3).ok()?;
         let result = (|| {
             let mut attributes =
                 HIDD_ATTRIBUTES { Size: size_of::<HIDD_ATTRIBUTES>() as u32, ..unsafe { std::mem::zeroed() } };
-            if !unsafe { HidD_GetAttributes(handle, &mut attributes) }
-                || (attributes.VendorID, attributes.ProductID) != (VENDOR_ID, product_id)
-            {
+            if !unsafe { HidD_GetAttributes(handle, &mut attributes) } || attributes.VendorID != VENDOR_ID {
                 return None;
             }
             let mut preparsed = 0;
@@ -627,18 +743,21 @@ mod windows {
                 && caps.UsagePage == USAGE_PAGE
                 && (62..=1024).contains(&input)
                 && (62..=1024).contains(&output))
-            .then(|| Interface {
-                path: path.to_owned(),
-                input_size: input,
-                output_size: output,
-                device_version: attributes.VersionNumber,
+            .then(|| {
+                let interface = Interface {
+                    path: path.to_owned(),
+                    input_size: input,
+                    output_size: output,
+                    device_version: attributes.VersionNumber,
+                };
+                (attributes.ProductID, interface)
             })
         })();
         unsafe { CloseHandle(handle) };
         result
     }
 
-    fn interfaces(product_id: u16) -> Result<Vec<Interface>> {
+    fn interfaces() -> Result<Vec<(u16, Interface)>> {
         let mut guid: GUID = unsafe { std::mem::zeroed() };
         unsafe { HidD_GetHidGuid(&mut guid) };
         let devices = unsafe { SetupDiGetClassDevsW(&guid, null(), null_mut(), DIGCF_PRESENT | DIGCF_DEVICEINTERFACE) };
@@ -680,7 +799,7 @@ mod windows {
                 };
                 let path =
                     String::from_utf16_lossy(&units[..units.iter().position(|&u| u == 0).unwrap_or(units.len())]);
-                found.extend(probe(&path, product_id));
+                found.extend(probe(&path));
             }
             Ok(())
         })();
@@ -688,20 +807,14 @@ mod windows {
         result.map(|()| found)
     }
 
-    /// Find exactly one Maxwell PlayStation control collection and open it exclusively.
+    /// Find exactly one supported Maxwell control collection and open it exclusively.
     fn session(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Session<WinHid>> {
-        let mut found = interfaces(transport.product_id())?;
-        if found.len() != 1 {
-            return Err(Error::other(format!(
-                "Expected one original Maxwell PlayStation {} interface, found {}",
-                transport.name(),
-                found.len()
-            )));
-        }
-        let interface = found.remove(0);
+        let (model, product_id, interface) = select(interfaces()?, transport)?;
         let handle = open_exclusive(&interface.path, &create_file)?;
         let io = WinHid { handle, input_size: interface.input_size };
-        Ok(Session::new(io, transport, interface, allow_live, allow_persistent))
+        let mut session = Session::new(io, transport, interface, allow_live, allow_persistent);
+        (session.model, session.product_id) = (model, product_id);
+        Ok(session)
     }
 
     pub fn open(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Box<dyn Device>> {
@@ -711,6 +824,7 @@ mod windows {
     /// A session that can read settings and, with `allow_write`, change them. No EQ writes.
     pub fn open_settings(transport: Transport, allow_write: bool) -> Result<Box<dyn Settings>> {
         let mut session = session(transport, false, false)?;
+        check_settings_model(session.model)?;
         session.allow_settings = allow_write;
         Ok(Box::new(session))
     }
@@ -718,6 +832,7 @@ mod windows {
     /// A session that can read controls and, with `allow_write`, change them. No EQ writes.
     pub fn open_controls(transport: Transport, allow_write: bool) -> Result<Box<dyn Controls>> {
         let mut session = session(transport, false, false)?;
+        check_controls_model(session.model)?;
         session.allow_controls = allow_write;
         Ok(Box::new(session))
     }

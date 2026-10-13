@@ -19,4 +19,4 @@ The Mac build has every feature. It always uses Maxwell PEQ's own filter encoder
 
 The Linux build uses Maxwell PEQ's own filter encoder, like the Mac build. It has read the headset, read balance and applied live EQ over the dongle; restore and saving to the headset haven't been tested on Linux yet.
 
-Headset support covers the original Audeze Maxwell (PlayStation), over USB-C or the dongle.
+Tested on the original Audeze Maxwell (PlayStation), over USB-C or the dongle. Maxwell 2 is supported but untested. Maxwell 2 ANC is not supported.

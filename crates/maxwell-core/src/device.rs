@@ -18,6 +18,11 @@ pub trait Device {
     fn has_storage_space(&mut self) -> Result<bool>;
     fn save_coefficients(&mut self, slot: u8, coefficients: &[u8]) -> Result<Value>;
     fn apply_live(&mut self, coefficients: &[u8]) -> Result<Value>;
+    /// After a save, make the headset play the stored preset at `index` where
+    /// the model needs it (Maxwell 2 over USB). True when it reselected.
+    fn reload_saved(&mut self, _index: u8) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 /// How far a run got; reported with any error.
@@ -133,6 +138,11 @@ pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Res
     result.insert("live_applied".into(), json!(true));
     result.insert("persistence_write_sent".into(), json!(persistent));
     result.insert("sha256".into(), json!(hex::encode(Sha256::digest(&blob))));
+    if persistent {
+        let index =
+            state["index"].as_u64().ok_or_else(|| Error::value("The headset is not on a custom preset."))? as u8;
+        result.insert("preset_reloaded".into(), json!(device.reload_saved(index)?));
+    }
     Ok(Value::Object(result))
 }
 

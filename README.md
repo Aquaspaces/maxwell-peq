@@ -1,8 +1,21 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
+Desktop editor for up to ten filters on the Audeze Maxwell, connected by USB-C or its wireless dongle. It has been tested only on the **original Maxwell PlayStation** (see [Headsets](#headsets)). Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
+
+## Headsets
+
+| Headset | USB product IDs | Status |
+| --- | --- | --- |
+| Original Maxwell PlayStation | `4B1A` USB-C, `4B19` dongle | Tested |
+| Maxwell 2 | `4B2A` USB-C, `4B28`/`4B29` dongle | Supported but untested |
+| Maxwell 2 ANC | `4BA8`–`4BAA` | Not supported; untested and unknown |
+| Original Maxwell Xbox | | Untested |
+
+Maxwell 2 support comes from static analysis of Audeze HQ 1.2.48 only. HQ sends Maxwell 2 EQ through the same live and save commands as the original, and that is what this app sends. After a save over USB-C, HQ also reselects the active custom preset so the headset reloads it, muting voice prompts for that second; the app does the same, on Maxwell 2 over USB-C only. Nobody has run this app against a Maxwell 2 yet, so start at low volume, back up first, and expect the Restore buttons to be the way back. Channel balance and the **Headset…** controls stay limited to the original Maxwell; on a Maxwell 2, switch presets in the Audeze app.
+
+HQ reads Maxwell 2 ANC EQ with a different command and data layout. What the ANC stores, and whether any of this applies to it, is unknown, so the app refuses it before sending anything.
 
 ## Download
 
@@ -80,7 +93,7 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 
 ## Use the headset
 
-1. Connect the original PS headset by USB-C, or connect its PlayStation dongle with the headset powered on and paired. Choose the matching connection in the device bar.
+1. Connect the headset by USB-C, or connect its wireless dongle with the headset powered on and paired. Choose the matching connection in the device bar.
 2. Close the Audeze app (the editor offers to). To edit, the headset has to be on one of the four custom presets; switch to one under **Headset…** or in the Audeze app.
 3. Click **Connect & back up**. It saves the exact saved coefficients to the backups folder. Built-in presets are readable, but applying requires a custom preset.
 4. Edit. With **Apply live** on, each change plays as soon as it compiles; turn it off to use the **Apply** button instead. Start at low listening volume. An acknowledgement means the headset accepted the command; it is not an audio measurement.
@@ -100,7 +113,7 @@ Hardware testing on 2026-10-12 confirmed a save to Custom 4 through the dongle, 
 
 ## Channel balance
 
-**Balance…** in the device bar sets the left and right driver levels, for headsets whose channels don't match. The dialog reads both levels through the selected connection when it opens (**Read headset** reads again), and the app keeps the first reading so **Put back** can always return to it. Change a side by one to three steps at a time and listen; higher values are louder. The headset applies each write immediately.
+**Balance…** in the device bar (original Maxwell only) sets the left and right driver levels, for headsets whose channels don't match. The dialog reads both levels through the selected connection when it opens (**Read headset** reads again), and the app keeps the first reading so **Put back** can always return to it. Change a side by one to three steps at a time and listen; higher values are louder. The headset applies each write immediately.
 
 - Values run from 0 to 150. 150 is a hard ceiling: higher values can damage the drivers, so the app never sends them. 136 and 142 are skipped because the firmware reserves them.
 - Factory values on current firmware are 141 / 149 on the USB-C profile and 147 / 147 on the wireless profile.

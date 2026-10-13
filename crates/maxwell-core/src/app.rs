@@ -63,6 +63,13 @@ fn valid_slot(state: &Value) -> bool {
     get(state, "slot").and_then(Value::as_u64).is_some_and(|slot| slot < 4)
 }
 
+/// "Original Maxwell PS · USB-C · preset 7", with the model the worker detected.
+fn device_label(state: &Value, transport: &str) -> String {
+    let model = state["device"]["model_label"].as_str().unwrap_or("Original Maxwell PS");
+    let index = py_str(get_or_null(state, "index"));
+    format!("{model} · {} · preset {index}", if transport == "usb" { "USB-C" } else { "dongle" })
+}
+
 impl App {
     /// A session; when `session_path` exists, it is recovered or refused.
     pub fn new(
@@ -78,7 +85,7 @@ impl App {
             backup: Value::Null,
             expected: Value::Null,
             transport: "usb".into(),
-            device: json!("Original Maxwell PlayStation"),
+            device: json!("Audeze Maxwell"),
             live_state: UNCHANGED.into(),
             storage_state: UNCHANGED.into(),
             backup_path: Value::Null,
@@ -457,12 +464,8 @@ impl App {
                     "This connection has a different preset or stored EQ. Your existing connection and original backup are unchanged.",
                 ));
             }
-            let index = py_str(get_or_null(&state, "index"));
             let previous = (self.transport.clone(), self.device.clone(), self.expected.clone());
-            self.device = json!(format!(
-                "Original Maxwell PS · {} · preset {index}",
-                if transport == "usb" { "USB-C" } else { "dongle" }
-            ));
+            self.device = json!(device_label(&state, &transport));
             self.transport = transport;
             self.expected = state.clone();
             if let Err(error) = self.persist() {
@@ -477,10 +480,7 @@ impl App {
             ]));
         }
         let index = py_str(get_or_null(&state, "index"));
-        self.device = json!(format!(
-            "Original Maxwell PS · {} · preset {index}",
-            if transport == "usb" { "USB-C" } else { "dongle" }
-        ));
+        self.device = json!(device_label(&state, &transport));
         self.transport = transport;
         let slot = get_or_null(&state, "slot");
         if slot.is_null() {

@@ -10,7 +10,7 @@ The interface is a local web page shown in a desktop window (pywebview on WebVie
 
 ## Users
 
-The owner of an original Audeze Maxwell (PlayStation version), tuning the headset for themselves at a desk while listening. They already use Equalizer APO / AutoEQ-style parametric presets and want to move them onto the headset and switch between several tunings quickly.
+The owner of an Audeze Maxwell, tested on the original PlayStation version (Maxwell 2 support is untested; Maxwell 2 ANC is unsupported), tuning the headset for themselves at a desk while listening. They already use Equalizer APO / AutoEQ-style parametric presets and want to move them onto the headset and switch between several tunings quickly.
 
 ## Product Purpose
 
@@ -23,7 +23,7 @@ Audeze HQ only offers a ten-band graphic EQ. This tool writes real parametric co
 ## Operating Context
 
 - Audeze HQ must be fully closed while the app talks to the headset (exclusive HID access).
-- Connections: USB-C cable or the PlayStation wireless dongle.
+- Connections: USB-C cable or the headset's wireless dongle.
 - Profiles are local files; the headset holds one custom EQ per custom slot.
 - Equalizer APO text (`Preamp:` / `Filter n: ON PK Fc … Hz Gain … dB Q …`) is the common exchange format, including AutoEQ output.
 

@@ -446,7 +446,7 @@ function deviceView() {
   if (!s.backup_exists) return {tone: 'idle', line: 'Headset not read yet',
     detail: 'Connect & back up saves your current custom preset so it can always be restored.'};
   const live = liveSignature(), saved = savedSignature();
-  const device = s.device || 'Original Maxwell';
+  const device = s.device || 'Audeze Maxwell';
   if (live === sig) return {tone: 'ok', line: device, detail: saved === sig ? 'Playing this profile. It is also saved on the headset.' : 'Playing this profile live. Headset storage is unchanged.'};
   if (s.live_state === 'applied') {
     const playing = state.library.profiles.find(p => canon(p.preset) === live);

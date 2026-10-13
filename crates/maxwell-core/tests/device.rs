@@ -26,6 +26,7 @@ struct Log {
     opened: Vec<(bool, bool, Transport)>,
     saves: Vec<(u8, Vec<u8>)>,
     lives: usize,
+    reloads: Vec<u8>,
 }
 
 struct Mock {
@@ -63,6 +64,11 @@ impl Device for Mock {
             Some(error) => Err(error),
             None => Ok(json!({"accepted": true, "ack_hex": "055b0300030e00"})),
         }
+    }
+
+    fn reload_saved(&mut self, index: u8) -> Result<bool> {
+        self.log.borrow_mut().reloads.push(index);
+        Ok(true)
     }
 }
 
@@ -121,8 +127,26 @@ fn save_checks_snapshot_then_verifies_then_applies() {
     let keys: Vec<_> = result.as_object().unwrap().keys().cloned().collect();
     assert_eq!(
         keys,
-        ["saved_verified", "state", "accepted", "ack_hex", "live_applied", "persistence_write_sent", "sha256"]
+        [
+            "saved_verified",
+            "state",
+            "accepted",
+            "ack_hex",
+            "live_applied",
+            "persistence_write_sent",
+            "sha256",
+            "preset_reloaded"
+        ]
     );
+    assert_eq!(log.reloads, vec![10], "reload follows the live apply");
+}
+
+#[test]
+fn live_apply_does_not_reload_the_saved_preset() {
+    let f = Fixture::new();
+    let (result, _, log) = f.run("apply", vec![f.state.clone()], |_| {});
+    assert!(result.unwrap().get("preset_reloaded").is_none());
+    assert!(log.borrow().reloads.is_empty());
 }
 
 #[test]

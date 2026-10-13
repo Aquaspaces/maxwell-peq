@@ -86,7 +86,7 @@ fn control_values_are_range_checked() {
 #[test]
 fn the_controls_allowlist_is_separate_from_eq_and_balance() {
     let writes = [
-        write_control_command(PRESET_INDEX, 7).unwrap(),
+        write_control_command(PRESET_INDEX, 1).unwrap(),
         write_control_command(CHAT_MIX, 10).unwrap(),
         write_control_command(AMP_GAIN, 142).unwrap(),
         write_control_command(AUTO_OFF, 300).unwrap(),
@@ -97,6 +97,12 @@ fn the_controls_allowlist_is_separate_from_eq_and_balance() {
         assert!(validate_request(write, true, true).is_err());
         assert!(validate_setting_write(write).is_err());
     }
+    // The EQ session may reselect a custom preset only for the Maxwell 2 reload after a save.
+    let reselect = write_control_command(PRESET_INDEX, 7).unwrap();
+    validate_control(&reselect, true).unwrap();
+    assert!(validate_request(&reselect, true, false).is_err());
+    validate_request(&reselect, false, true).unwrap();
+    assert!(validate_setting_write(&reselect).is_err());
     for sub in [PRESET_INDEX, CHAT_MIX, AUTO_OFF, MIC_MUTE, MAX_SIDETONE] {
         validate_control(&read_control_command(sub).unwrap(), false).unwrap();
     }
