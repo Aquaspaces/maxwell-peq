@@ -1,8 +1,9 @@
-//! The device session: backups, the recovery journal, and the rules for when
-//! the headset may be written.
+//! The device session: which connection to use, which preset is active, and
+//! which profile each of the four custom presets was saved from.
 //!
-//! Every write is journaled before it is sent, so a crash or a hung worker
-//! leaves enough on disk to restore the original preset after a restart.
+//! Profiles are saved straight into a custom preset, then played by making
+//! that preset active, here or on the headset. Nothing is sent as temporary
+//! live EQ, so switching presets always plays what the preset stores.
 
 use crate::audeze::AudezeWatch;
 use crate::fmt::py_str;
@@ -11,16 +12,13 @@ use crate::util::{atomic_json, token_urlsafe, utc_stamp};
 use crate::worker::{Runner, Worker};
 use crate::{Error, Result};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const DEVICE_ENDPOINTS: [&str; 11] = [
+pub const DEVICE_ENDPOINTS: [&str; 9] = [
     "/api/read_device",
-    "/api/apply",
-    "/api/restore",
     "/api/save",
-    "/api/restore_saved",
+    "/api/select",
     "/api/balance/read",
     "/api/balance/apply",
     "/api/balance/source",
@@ -29,164 +27,95 @@ pub const DEVICE_ENDPOINTS: [&str; 11] = [
     "/api/preset/select",
 ];
 
-const UNCHANGED: &str = "unchanged";
+/// Custom preset `slot` (0..3) is headset preset `slot + 7`, shown as Preset
+/// `slot + 1` in the Audeze app.
+const FIRST_CUSTOM: u64 = 7;
 
 pub struct App {
     pub enable_live: bool,
     pub audeze: Arc<AudezeWatch>,
     pub token: String,
-    pub backup: Value,
-    pub expected: Value,
+    /// The connection the user chose: `auto`, `usb` or `dongle`.
     pub transport: String,
+    /// The connection the last headset read went through, once there is one.
+    pub connection: Value,
     pub device: Value,
-    pub live_state: String,
-    pub storage_state: String,
-    pub backup_path: Value,
-    pub pending: Value,
-    pub last_profile: Value,
-    pub saved_profile: Value,
-    pub session_recovered: bool,
-    pub session_path: Option<PathBuf>,
+    /// The preset index last read from the headset.
+    pub index: Value,
+    /// Per custom preset: `{profile_id, name, preset, blob_hex}` for the
+    /// profile saved there, or null. Dropped once the preset stores other EQ.
+    pub links: [Value; 4],
     /// The last balance read in this run; writes need one first.
     pub balance: Value,
+    pub data_dir: Option<PathBuf>,
     /// The last controls read in this run; control writes need one first.
     pub controls: Value,
     runner: Runner,
 }
 
-fn saved_hex_len(state: &Value) -> Option<usize> {
-    let text = get(state, "saved_coefficients_hex").map_or(Some(""), Value::as_str)?;
-    hex::decode(text).ok().map(|bytes| bytes.len())
+/// "Preset 2" for a custom preset, "built-in preset 3" otherwise.
+fn preset_name(index: &Value) -> String {
+    match index.as_u64() {
+        Some(index) if (FIRST_CUSTOM..FIRST_CUSTOM + 4).contains(&index) => {
+            format!("Preset {}", index - FIRST_CUSTOM + 1)
+        }
+        _ => format!("built-in preset {}", py_str(index)),
+    }
 }
 
-fn valid_slot(state: &Value) -> bool {
-    get(state, "slot").and_then(Value::as_u64).is_some_and(|slot| slot < 4)
+/// "Original Maxwell PS · USB-C · Preset 2", with the model the worker detected.
+fn device_line(transport: &str, state: &Value) -> Value {
+    json!(format!(
+        "{} · {} · {}",
+        state["device"]["model_label"].as_str().unwrap_or("Original Maxwell PS"),
+        match transport {
+            "usb" => "USB-C",
+            "dongle" => "dongle",
+            _ => "connected",
+        },
+        preset_name(get_or_null(state, "index"))
+    ))
 }
 
-/// "Original Maxwell PS · USB-C · preset 7", with the model the worker detected.
-fn device_label(state: &Value, transport: &str) -> String {
-    let model = state["device"]["model_label"].as_str().unwrap_or("Original Maxwell PS");
-    let index = py_str(get_or_null(state, "index"));
-    format!("{model} · {} · preset {index}", if transport == "usb" { "USB-C" } else { "dongle" })
+fn load_links(data_dir: Option<&PathBuf>) -> [Value; 4] {
+    let mut links = [Value::Null, Value::Null, Value::Null, Value::Null];
+    let stored = data_dir
+        .map(|dir| crate::paths::links_path(dir))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(Value::Array(saved)) = stored.as_ref().and_then(|data| data.get("slots")) {
+        for (link, saved) in links.iter_mut().zip(saved) {
+            if saved.get("blob_hex").is_some_and(Value::is_string) {
+                *link = saved.clone();
+            }
+        }
+    }
+    links
 }
 
 impl App {
-    /// A session; when `session_path` exists, it is recovered or refused.
-    pub fn new(
-        enable_live: bool,
-        session_path: Option<PathBuf>,
-        audeze: Arc<AudezeWatch>,
-        runner: Runner,
-    ) -> Result<Self> {
-        let mut app = App {
+    pub fn new(enable_live: bool, data_dir: Option<PathBuf>, audeze: Arc<AudezeWatch>, runner: Runner) -> Self {
+        App {
             enable_live,
             audeze,
             token: token_urlsafe(),
-            backup: Value::Null,
-            expected: Value::Null,
-            transport: "usb".into(),
+            transport: "auto".into(),
+            connection: Value::Null,
             device: json!("Audeze Maxwell"),
-            live_state: UNCHANGED.into(),
-            storage_state: UNCHANGED.into(),
-            backup_path: Value::Null,
-            pending: Value::Null,
-            last_profile: Value::Null,
-            saved_profile: Value::Null,
-            session_recovered: false,
-            session_path,
+            index: Value::Null,
+            links: load_links(data_dir.as_ref()),
             balance: Value::Null,
             controls: Value::Null,
+            data_dir,
             runner,
-        };
-        if app.session_path.as_ref().is_some_and(|path| path.exists()) {
-            app.recover()?;
-        }
-        Ok(app)
-    }
-
-    fn session(&self) -> Value {
-        object([
-            ("version", json!(1)),
-            ("backup", self.backup.clone()),
-            ("backup_path", self.backup_path.clone()),
-            ("expected", self.expected.clone()),
-            ("transport", json!(self.transport)),
-            ("device", self.device.clone()),
-            ("live_state", json!(self.live_state)),
-            ("storage_state", json!(self.storage_state)),
-            ("pending", self.pending.clone()),
-            ("last_profile", self.last_profile.clone()),
-            ("saved_profile", self.saved_profile.clone()),
-        ])
-    }
-
-    fn persist(&self) -> Result<()> {
-        match &self.session_path {
-            Some(path) => atomic_json(path, &self.session()),
-            None => Ok(()),
         }
     }
 
-    fn recover(&mut self) -> Result<()> {
-        let path = self.session_path.clone().expect("recover needs a session path");
-        let text = std::fs::read_to_string(&path)?;
-        let invalid = || Error::value("Invalid recovery session; preserve backups/session.json for recovery.");
-        let data: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|_| invalid())?;
-        let field = |key| get(&data, key).and_then(Value::as_str);
-        let one_of = |key, options: &[&str]| field(key).is_some_and(|value| options.contains(&value));
-        if !data.is_object()
-            || get(&data, "version").and_then(Value::as_f64) != Some(1.0)
-            || !one_of("transport", &["usb", "dongle"])
-            || !one_of("live_state", &["unchanged", "applied", "uncertain"])
-            || !one_of("storage_state", &["unchanged", "saved", "uncertain"])
-        {
-            return Err(invalid());
-        }
-        for key in ["backup", "expected"] {
-            let value = get_or_null(&data, key);
-            if value.is_null() {
-                continue;
-            }
-            let state = if key == "backup" && value.is_object() { get_or_null(value, "state") } else { value };
-            if !state.is_object() || !valid_slot(state) {
-                return Err(Error::value("Invalid preset snapshot in recovery session."));
-            }
-            if saved_hex_len(state) != Some(crate::compile::BLOB_BYTES) {
-                return Err(Error::value("Invalid saved coefficients in recovery session."));
-            }
-        }
-        if (field("live_state") != Some(UNCHANGED) || field("storage_state") != Some(UNCHANGED))
-            && !truthy(get_or_null(&data, "backup"))
-        {
-            return Err(Error::value("Recovery session has no original preset backup."));
-        }
-        let pending = get_or_null(&data, "pending");
-        if !pending.is_null() && !pending.is_object() {
-            return Err(Error::value("Invalid pending recovery operation."));
-        }
-        let take = |key| get_or_null(&data, key).clone();
-        self.backup = take("backup");
-        self.backup_path = take("backup_path");
-        self.expected = take("expected");
-        self.transport = field("transport").unwrap_or("usb").into();
-        self.device = take("device");
-        self.live_state = field("live_state").unwrap_or(UNCHANGED).into();
-        self.storage_state = field("storage_state").unwrap_or(UNCHANGED).into();
-        self.pending = take("pending");
-        self.last_profile = take("last_profile");
-        self.saved_profile = take("saved_profile");
-        self.session_recovered = true;
-        Ok(())
-    }
-
-    /// Write a timestamped audit file next to the session; returns its path.
+    /// Write a timestamped record to the logs folder; returns its path.
     fn audit(&self, kind: &str, value: &Value) -> Result<String> {
-        let directory = match &self.session_path {
-            Some(path) => path.parent().map(PathBuf::from).unwrap_or_default(),
-            None => crate::paths::data_root().join("backups"),
-        };
+        let data = self.data_dir.clone().unwrap_or_else(crate::paths::data_root);
         let stamp = utc_stamp();
-        let target = directory.join(format!("{stamp}-{kind}.json"));
+        let target = crate::paths::logs_path(&data).join(format!("{stamp}-{kind}.json"));
         let mut record = Map::new();
         record.insert("created_at".into(), json!(stamp));
         if let Value::Object(fields) = value {
@@ -196,8 +125,12 @@ impl App {
         Ok(target.display().to_string())
     }
 
-    pub fn data_dir(&self) -> Option<PathBuf> {
-        self.session_path.as_ref().and_then(|path| path.parent()?.parent().map(PathBuf::from))
+    /// Keep the links across restarts. Without a data folder they live in memory only.
+    fn store_links(&self) {
+        if let Some(dir) = &self.data_dir {
+            // A failed write loses only the labels, never headset state.
+            let _ = atomic_json(&crate::paths::links_path(dir), &json!({"version": 1, "slots": self.links}));
+        }
     }
 
     pub fn status(&self) -> Value {
@@ -206,8 +139,20 @@ impl App {
             Err(error) => (false, json!(error.to_string())),
         };
         let audeze = self.audeze.running(false).unwrap_or_default();
-        let pending_operation =
-            if truthy(&self.pending) { get_or_null(&self.pending, "operation").clone() } else { Value::Null };
+        let slots = (0..4u64)
+            .map(|slot| {
+                let index = FIRST_CUSTOM + slot;
+                let link = &self.links[slot as usize];
+                object([
+                    ("slot", json!(slot)),
+                    ("index", json!(index)),
+                    ("active", json!(self.index.as_u64() == Some(index))),
+                    ("profile_id", get_or_null(link, "profile_id").clone()),
+                    ("name", get_or_null(link, "name").clone()),
+                    ("preset", get_or_null(link, "preset").clone()),
+                ])
+            })
+            .collect();
         object([
             ("token", json!(self.token)),
             ("dll_available", json!(dll_available)),
@@ -222,19 +167,15 @@ impl App {
             ),
             ("live_enabled", json!(self.enable_live)),
             ("device", self.device.clone()),
-            ("backup_exists", json!(!self.backup.is_null())),
-            ("live_state", json!(self.live_state)),
-            ("storage_state", json!(self.storage_state)),
+            ("device_read", json!(!self.index.is_null())),
+            ("index", self.index.clone()),
+            ("slots", Value::Array(slots)),
             ("transport", json!(self.transport)),
-            ("transports", json!(["usb", "dongle"])),
-            ("session_recovered", json!(self.session_recovered)),
-            ("pending_operation", pending_operation),
-            ("last_profile", self.last_profile.clone()),
-            ("saved_profile", self.saved_profile.clone()),
+            ("transports", json!(["auto", "usb", "dongle"])),
+            ("connection", self.connection.clone()),
             ("audeze_running", json!(!audeze.is_empty())),
             ("audeze_apps", json!(audeze)),
-            ("data_dir", self.data_dir().map_or(Value::Null, |dir| json!(dir.display().to_string()))),
-            ("backup_path", self.backup_path.clone()),
+            ("data_dir", self.data_dir.as_ref().map_or(Value::Null, |dir| json!(dir.display().to_string()))),
             ("hardware_audio_verified", json!(false)),
             ("balance", self.balance.clone()),
             ("controls", self.controls.clone()),
@@ -244,8 +185,8 @@ impl App {
     fn request_transport(request: &Value, default: &str) -> Result<String> {
         match get(request, "transport") {
             None => Ok(default.to_owned()),
-            Some(Value::String(t)) if t == "usb" || t == "dongle" => Ok(t.clone()),
-            Some(_) => Err(Error::value("Choose USB-C or dongle.")),
+            Some(Value::String(t)) if t == "auto" || t == "usb" || t == "dongle" => Ok(t.clone()),
+            Some(_) => Err(Error::value("Choose automatic, USB-C or dongle.")),
         }
     }
 
@@ -254,6 +195,13 @@ impl App {
     fn balance(&mut self, path: &str, request: &Value) -> Result<Value> {
         let read_through = self.balance.get("transport").and_then(Value::as_str).map(str::to_owned);
         let transport = Self::request_transport(request, read_through.as_deref().unwrap_or(&self.transport))?;
+        // Writes go through the connection the balance was read through.
+        let transport = match (&read_through, path) {
+            (Some(read_through), "/api/balance/apply" | "/api/balance/source") if transport == "auto" => {
+                read_through.clone()
+            }
+            _ => transport,
+        };
         let mut device_request = object([("transport", json!(transport))]);
         let operation = match path {
             "/api/balance/read" => "balance_read",
@@ -276,7 +224,7 @@ impl App {
                 }
                 Some(_) => {}
             }
-            if self.session_path.is_some() {
+            if self.data_dir.is_some() {
                 let record = object([("request", device_request.clone()), ("last_read", self.balance.clone())]);
                 self.audit(operation, &record)?;
             }
@@ -288,8 +236,7 @@ impl App {
             // The headset may hold anything now; make the page read again.
             self.balance = Value::Null;
         }
-        // The EQ backup stays tied to the connection it was read through, so
-        // a balance run leaves `self.transport` alone.
+        // Balance reads choose their own connection; EQ keeps `self.transport`.
         let mut result = outcome?;
         if let Value::Object(fields) = &mut result {
             fields.remove("write_replies_hex");
@@ -299,7 +246,7 @@ impl App {
             ("right", get_or_null(&result, "right").clone()),
             ("source", get_or_null(&result, "source").clone()),
             ("source_profile", get_or_null(&result, "source_profile").clone()),
-            ("transport", json!(transport)),
+            ("transport", get(&result, "transport").cloned().unwrap_or_else(|| json!(transport))),
         ]);
         let (left, right) = (py_str(get_or_null(&result, "left")), py_str(get_or_null(&result, "right")));
         let message = match operation {
@@ -374,15 +321,9 @@ impl App {
         Ok(result)
     }
 
-    /// Switch the onboard preset, then read it as a fresh connection would.
-    /// The headset loads the new preset's own EQ, so any EQ this session sent
-    /// must be put back first.
+    /// Switch to any onboard preset from the Headset dialog, then read the
+    /// headset again. Switching never changes what the presets store.
     fn select_preset(&mut self, request: &Value) -> Result<Value> {
-        if self.live_state != UNCHANGED || self.storage_state != UNCHANGED {
-            return Err(Error::value(
-                "Restore the original EQ first. It belongs to the preset that is active now. No preset was switched.",
-            ));
-        }
         let transport = Self::request_transport(request, &self.transport)?;
         let device_request = object([
             ("operation", json!("control_write")),
@@ -390,21 +331,7 @@ impl App {
             ("value", get_or_null(request, "index").clone()),
             ("transport", json!(transport)),
         ]);
-        let outcome = self.write_control(&device_request);
-        let started = match &outcome {
-            Ok(result) => truthy(get_or_null(result, "changed")),
-            Err(Error::Worker(details)) => truthy(details.get("write_started").unwrap_or(&Value::Null)),
-            Err(_) => false,
-        };
-        if started {
-            // The old backup describes the preset the headset left.
-            self.backup = Value::Null;
-            self.backup_path = Value::Null;
-            self.expected = Value::Null;
-            self.pending = Value::Null;
-            self.persist()?;
-        }
-        let switched = outcome?;
+        let switched = self.write_control(&device_request)?;
         if let Value::Object(fields) = &mut self.controls {
             fields.insert("preset".into(), get_or_null(&switched, "value").clone());
         }
@@ -417,13 +344,10 @@ impl App {
                 )));
             }
         };
-        let custom = truthy(get_or_null(&switched["value"], "custom"));
-        let message = match (custom, truthy(get_or_null(&result, "backup_exists"))) {
-            (true, true) => format!("Switched to {name}. Its saved EQ is backed up, so you can edit it here."),
-            (true, false) => format!("Switched to {name}, but its saved EQ was not backed up. Read again."),
-            (false, _) => format!(
-                "Switched to {name}. Built-in presets can't be edited; switch to EQ 1 to EQ 4 to send your own EQ."
-            ),
+        let message = if truthy(get_or_null(&result, "custom")) {
+            format!("Switched to {name}.")
+        } else {
+            format!("Switched to {name}. Make Preset 1 to 4 active to hear your profiles.")
         };
         result["message"] = json!(message);
         result["preset"] = get_or_null(&switched, "value").clone();
@@ -435,99 +359,130 @@ impl App {
         (self.runner)(worker, request)
     }
 
-    fn read_device(&mut self, request: &Value) -> Result<Value> {
-        // Once EQ has been sent, reading again only switches or rebinds the
-        // connection: the headset must still hold what the session expects, and
-        // the original backup and live/saved states are kept. No EQ is sent.
-        let handoff = !self.backup.is_null() && (self.live_state != UNCHANGED || self.storage_state != UNCHANGED);
-        if handoff && self.storage_state == "uncertain" {
-            return Err(Error::value(
-                "Restore the uncertain saved profile through its current connection before switching.",
-            ));
+    /// Take in a fresh headset read. A custom preset that stores other EQ
+    /// than the profile saved there was changed elsewhere, so its link goes.
+    fn observe(&mut self, requested: &str, state: &Value) {
+        let connection = get(state, "transport").and_then(Value::as_str).unwrap_or(requested);
+        let mut stored: [Option<&Value>; 4] = [None; 4];
+        if let Some(Value::Array(slots)) = get(state, "slots") {
+            for (known, hex) in stored.iter_mut().zip(slots) {
+                *known = Some(hex);
+            }
+        } else if let Some(slot) = get(state, "slot").and_then(Value::as_u64).filter(|slot| *slot < 4) {
+            stored[slot as usize] = Some(get_or_null(state, "saved_coefficients_hex"));
         }
-        if !handoff && (self.live_state != UNCHANGED || self.storage_state != UNCHANGED) {
-            return Err(Error::value("Restore the existing backup before reading a new one."));
-        }
-        let transport = match get(request, "transport") {
-            None => self.transport.clone(),
-            Some(Value::String(t)) if t == "usb" || t == "dongle" => t.clone(),
-            Some(_) => return Err(Error::value("Choose USB-C or dongle.")),
-        };
-        let state = self.run(Worker::Device, &json!({"operation": "read", "transport": transport}))?;
-        if handoff {
-            let expected = if self.expected.is_null() { &self.backup["state"] } else { &self.expected };
-            if ["index", "slot", "raw_ui_hex", "saved_coefficients_hex"]
-                .iter()
-                .any(|key| get_or_null(&state, key) != get_or_null(expected, key))
+        let mut changed = false;
+        for (link, hex) in self.links.iter_mut().zip(stored) {
+            if let Some(hex) = hex
+                && !link.is_null()
+                && get_or_null(link, "blob_hex") != hex
             {
-                return Err(Error::value(
-                    "This connection has a different preset or stored EQ. Your existing connection and original backup are unchanged.",
-                ));
+                *link = Value::Null;
+                changed = true;
             }
-            let previous = (self.transport.clone(), self.device.clone(), self.expected.clone());
-            self.device = json!(device_label(&state, &transport));
-            self.transport = transport;
-            self.expected = state.clone();
-            if let Err(error) = self.persist() {
-                (self.transport, self.device, self.expected) = previous;
-                return Err(error);
-            }
-            return Ok(object([
-                ("state", state),
-                ("backup_exists", json!(true)),
-                ("backup_path", self.backup_path.clone()),
-                ("message", json!("Connection verified. Your original backup is kept. No EQ was sent.")),
-            ]));
         }
-        let index = py_str(get_or_null(&state, "index"));
-        self.device = json!(device_label(&state, &transport));
-        self.transport = transport;
-        let slot = get_or_null(&state, "slot");
-        if slot.is_null() {
-            self.backup = Value::Null;
-            self.backup_path = Value::Null;
-            self.expected = Value::Null;
-            self.pending = Value::Null;
-            self.persist()?;
-            return Ok(object([
-                ("state", state.clone()),
-                ("backup_exists", json!(false)),
-                (
-                    "message",
-                    json!(format!(
-                        "Headset read successfully. Preset {index} is built-in. Switch to a custom preset (EQ 1 to EQ 4) to send your own EQ."
-                    )),
-                ),
-            ]));
+        if changed {
+            self.store_links();
         }
-        let slot = slot.as_u64().filter(|slot| *slot < 4).ok_or_else(|| Error::value("Unexpected preset slot."))?;
-        let blob = get(&state, "saved_coefficients_hex")
-            .and_then(Value::as_str)
-            .and_then(|text| hex::decode(text).ok())
-            .ok_or_else(|| Error::value("The headset returned no saved coefficients."))?;
-        let backup = object([
-            ("state", state.clone()),
-            ("coefficient_sha256", json!(hex::encode(Sha256::digest(&blob)))),
-            ("note", json!("Exact saved coefficients. Existing unsaved live DSP state cannot be read.")),
+        self.index = get_or_null(state, "index").clone();
+        self.device = device_line(connection, state);
+        self.connection = json!(connection);
+        self.transport = requested.to_owned();
+    }
+
+    fn read_device(&mut self, request: &Value) -> Result<Value> {
+        let transport = Self::request_transport(request, &self.transport)?;
+        let mut state = self.run(Worker::Device, &json!({"operation": "read", "transport": transport}))?;
+        self.observe(&transport, &state);
+        if let Value::Object(fields) = &mut state {
+            fields.remove("slots");
+        }
+        let custom = get(&state, "slot").and_then(Value::as_u64).is_some_and(|slot| slot < 4);
+        let preset = preset_name(get_or_null(&state, "index"));
+        let message = if custom {
+            format!("Headset read. {preset} is active.")
+        } else {
+            format!("Headset read. The headset is on {preset}. Make Preset 1 to 4 active to hear your profiles.")
+        };
+        Ok(object([("state", state), ("custom", json!(custom)), ("message", json!(message))]))
+    }
+
+    /// Make custom preset `index` (7..10) active.
+    fn select(&mut self, request: &Value) -> Result<Value> {
+        let transport = Self::request_transport(request, &self.transport)?;
+        let index = get(request, "index")
+            .and_then(Value::as_u64)
+            .filter(|index| (FIRST_CUSTOM..FIRST_CUSTOM + 4).contains(index))
+            .ok_or_else(|| Error::value("Choose Preset 1, 2, 3 or 4."))?;
+        let device_request = json!({"operation": "select", "index": index, "transport": transport});
+        let mut result = self.run(Worker::Device, &device_request)?;
+        let state = get_or_null(&result, "state").clone();
+        if state.is_object() {
+            self.observe(&transport, &state);
+        }
+        if !result.is_object() {
+            result = json!({});
+        }
+        result["message"] = json!(format!("{} is now active.", preset_name(&json!(index))));
+        Ok(result)
+    }
+
+    /// Save a profile into custom preset `slot` (0..3). The request carries
+    /// `preset` (filters and preamp), `slot`, and the profile's id and name.
+    fn save(&mut self, request: &Value) -> Result<Value> {
+        let transport = Self::request_transport(request, &self.transport)?;
+        let slot = get(request, "slot")
+            .and_then(Value::as_u64)
+            .filter(|slot| *slot < 4)
+            .ok_or_else(|| Error::value("Choose Preset 1, 2, 3 or 4."))?;
+        let preset = get_or_null(request, "preset").clone();
+        let compiled = self.run(Worker::Compile, &preset)?;
+        let blob_hex = get(&compiled, "blob_hex")
+            .cloned()
+            .ok_or_else(|| Error::other("The compiler returned no coefficients."))?;
+        let device_request = object([
+            ("operation", json!("save")),
+            ("slot", json!(slot)),
+            ("blob_hex", blob_hex.clone()),
+            ("transport", json!(transport)),
         ]);
-        let target = self.audit(&format!("slot{}", slot + 1), &backup)?;
-        self.backup = backup;
-        self.backup_path = json!(target);
-        self.expected = state.clone();
-        self.pending = Value::Null;
-        self.persist()?;
-        Ok(object([
-            ("state", state),
-            ("backup_exists", json!(true)),
-            ("backup_path", json!(target)),
-            (
-                "message",
-                json!(format!(
-                    "Custom preset {} backed up. Restore will reapply its exact saved coefficients.",
-                    slot + 1
-                )),
-            ),
-        ]))
+        let outcome = self.run(Worker::Device, &device_request);
+        let detail = |key: &str| match &outcome {
+            Ok(_) => true,
+            Err(Error::Worker(details)) => truthy(details.get(key).unwrap_or(&Value::Null)),
+            Err(_) => false,
+        };
+        let (verified, started) = (detail("saved_verified"), detail("write_started"));
+        if started || verified {
+            // The preset now holds this profile, or something unknown.
+            self.links[slot as usize] = if verified {
+                object([
+                    ("profile_id", get_or_null(request, "profile_id").clone()),
+                    ("name", get_or_null(request, "name").clone()),
+                    ("preset", preset),
+                    ("blob_hex", blob_hex),
+                ])
+            } else {
+                Value::Null
+            };
+            self.store_links();
+        }
+        let mut result = outcome?;
+        let state = get_or_null(&result, "state").clone();
+        if state.is_object() {
+            self.observe(&transport, &state);
+        }
+        let target = preset_name(&json!(FIRST_CUSTOM + slot));
+        let message = if truthy(get_or_null(&result, "live_applied")) {
+            format!("Saved to {target}. It is playing now.")
+        } else {
+            format!("Saved to {target}. Make it active to hear it.")
+        };
+        if !result.is_object() {
+            result = json!({});
+        }
+        result["message"] = json!(message);
+        Ok(result)
     }
 
     /// A device action. The caller holds the device lock.
@@ -543,175 +498,13 @@ impl App {
                 "Audeze App/HQ is open. Custom PEQ will not work while it is open; close it first. No EQ was sent.",
             ));
         }
-        if path == "/api/read_device" {
-            return self.read_device(request);
+        match path {
+            "/api/read_device" => self.read_device(request),
+            "/api/select" => self.select(request),
+            "/api/save" => self.save(request),
+            "/api/preset/select" => self.select_preset(request),
+            _ if path.starts_with("/api/controls/") => self.controls(path, request),
+            _ => self.balance(path, request),
         }
-        if path.starts_with("/api/balance/") {
-            return self.balance(path, request);
-        }
-        if path.starts_with("/api/controls/") {
-            return self.controls(path, request);
-        }
-        if path == "/api/preset/select" {
-            return self.select_preset(request);
-        }
-        if self.backup.is_null() {
-            return Err(Error::value("Read and back up the active custom preset first."));
-        }
-        let persistent = matches!(path, "/api/save" | "/api/restore_saved");
-        let restoring = matches!(path, "/api/restore" | "/api/restore_saved");
-        let (blob_hex, compiled) = if !restoring {
-            if self.live_state == "uncertain" || self.storage_state == "uncertain" {
-                return Err(Error::value("Restore after the previous uncertain write before applying a new filter."));
-            }
-            let compiled = self.run(Worker::Compile, request)?;
-            let blob_hex = get(&compiled, "blob_hex")
-                .cloned()
-                .ok_or_else(|| Error::other("The compiler returned no coefficients."))?;
-            (blob_hex, true)
-        } else {
-            (self.backup["state"]["saved_coefficients_hex"].clone(), false)
-        };
-        if path == "/api/restore" && self.storage_state == "uncertain" {
-            return Err(Error::value("Saved preset state is uncertain. Use Restore saved preset to recover it."));
-        }
-        let previous = (self.live_state.clone(), self.storage_state.clone());
-        if self.expected.is_null() {
-            self.expected = self.backup["state"].clone();
-        }
-        let operation = match path {
-            "/api/restore_saved" => "restore_saved",
-            _ if persistent => "save",
-            _ => "apply",
-        };
-        let preset = if compiled { request.clone() } else { Value::Null };
-        let previous_pending = std::mem::replace(
-            &mut self.pending,
-            object([("operation", json!(operation)), ("blob_hex", blob_hex.clone()), ("preset", preset.clone())]),
-        );
-        self.live_state = "uncertain".into();
-        if persistent {
-            self.storage_state = "uncertain".into();
-        }
-        // From here on, a crash must leave enough on disk to restore.
-        let journal = self.persist().and_then(|()| {
-            if persistent {
-                let record = object([
-                    ("preset", preset.clone()),
-                    ("blob_hex", blob_hex.clone()),
-                    ("original_backup", self.backup_path.clone()),
-                    ("expected", self.expected.clone()),
-                ]);
-                self.audit(operation, &record)?;
-            }
-            Ok(())
-        });
-        if let Err(error) = journal {
-            (self.live_state, self.storage_state) = previous;
-            self.pending = previous_pending;
-            let _ = self.persist();
-            return Err(error);
-        }
-        let device_request = object([
-            ("operation", json!(operation)),
-            ("blob_hex", blob_hex.clone()),
-            ("expected", self.expected.clone()),
-            ("transport", json!(self.transport)),
-        ]);
-        let outcome = self.run(Worker::Device, &device_request).and_then(|result| {
-            let state = get_or_null(&result, "state");
-            if persistent
-                && (!truthy(get_or_null(&result, "saved_verified"))
-                    || !state.is_object()
-                    || get_or_null(state, "saved_coefficients_hex") != &blob_hex)
-            {
-                return Err(Error::other("Saved coefficient readback is unconfirmed. Use Restore saved preset."));
-            }
-            if persistent && !truthy(get_or_null(&result, "live_applied")) {
-                let Value::Object(details) = json!({
-                    "error": "Saved coefficients were verified, but live application is unconfirmed.",
-                    "write_started": true, "persistent_write_started": true,
-                    "saved_verified": true, "state": state,
-                }) else {
-                    unreachable!()
-                };
-                return Err(Error::Worker(details));
-            }
-            Ok(result)
-        });
-        let mut result = match outcome {
-            Ok(result) => result,
-            Err(Error::Worker(details)) => {
-                let mut error = Error::Worker(details.clone());
-                let detail = |key: &str| details.get(key).unwrap_or(&Value::Null);
-                if detail("write_started") == &json!(false) && !truthy(detail("persistent_write_started")) {
-                    (self.live_state, self.storage_state) = previous;
-                    self.pending = previous_pending;
-                    if truthy(detail("state_changed")) && self.storage_state == UNCHANGED {
-                        self.backup = Value::Null;
-                        self.expected = Value::Null;
-                        self.backup_path = Value::Null;
-                        self.pending = Value::Null;
-                        self.live_state = UNCHANGED.into();
-                    }
-                } else if persistent && truthy(detail("saved_verified")) && detail("state").is_object() {
-                    self.expected = detail("state").clone();
-                    self.storage_state = if get_or_null(&self.expected, "saved_coefficients_hex") == &blob_hex {
-                        if restoring { UNCHANGED } else { "saved" }
-                    } else {
-                        "uncertain"
-                    }
-                    .into();
-                    if !restoring {
-                        self.last_profile = request.clone();
-                    }
-                    self.saved_profile = if self.storage_state == "saved" { request.clone() } else { Value::Null };
-                    let mut details = details.clone();
-                    details.insert(
-                        "error".into(),
-                        json!(format!(
-                            "{error} Saved coefficients were read back; live EQ is unconfirmed. The original backup is intact."
-                        )),
-                    );
-                    error = Error::Worker(details);
-                } else if persistent && detail("persistent_write_started") == &json!(false) {
-                    self.storage_state = previous.1;
-                }
-                self.persist()?;
-                return Err(error);
-            }
-            Err(error) => {
-                self.persist()?;
-                return Err(error);
-            }
-        };
-        if persistent {
-            self.expected = result["state"].clone();
-            self.storage_state = if restoring { UNCHANGED } else { "saved" }.into();
-            self.saved_profile = if restoring { Value::Null } else { request.clone() };
-        }
-        if !restoring {
-            self.last_profile = request.clone();
-        }
-        self.live_state = if restoring { UNCHANGED } else { "applied" }.into();
-        self.pending = Value::Null;
-        self.persist()?;
-        let message = match path {
-            "/api/apply" => "Headset acknowledged the temporary EQ. Saved presets are unchanged.",
-            "/api/restore" => {
-                "Headset acknowledged the original backup in live EQ. This does not change saved storage."
-            }
-            "/api/save" => {
-                "Preset saved, read back exactly, and applied. Audeze HQ sliders still show their old values; editing them can replace this EQ."
-            }
-            _ => "Original saved coefficients restored, read back exactly, and applied.",
-        };
-        if !result.is_object() {
-            result = json!({});
-        }
-        result["message"] = json!(message);
-        result["live_state"] = json!(self.live_state);
-        result["storage_state"] = json!(self.storage_state);
-        Ok(result)
     }
 }

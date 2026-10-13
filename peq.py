@@ -206,7 +206,7 @@ def compile_preset(request):
                 raise ValueError('Compiled response exceeds available headroom.')
             if 20 <= frequency <= 20000:
                 points.append([frequency, actual])
-        if error > 0.15:
+        if error > 0.5:
             raise ValueError(f'Coefficient precision error is {error:.3f} dB at {rate} Hz; try a higher frequency, smaller gain, or lower Q where adjustable.')
         max_error = max(max_error, error)
         banks.append(dict(id=rate_id, rate=rate, words=words))

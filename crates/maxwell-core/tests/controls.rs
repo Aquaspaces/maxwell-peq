@@ -441,7 +441,7 @@ fn a_failed_write_says_the_headset_may_have_changed() {
 }
 
 /// App rules with a fake worker.
-fn app(session_path: Option<PathBuf>, replies: Vec<Result<Value>>) -> (App, Arc<Mutex<Vec<Value>>>) {
+fn app(data_dir: Option<PathBuf>, replies: Vec<Result<Value>>) -> (App, Arc<Mutex<Vec<Value>>>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let log = calls.clone();
     let mut replies: VecDeque<Result<Value>> = replies.into();
@@ -451,7 +451,7 @@ fn app(session_path: Option<PathBuf>, replies: Vec<Result<Value>>) -> (App, Arc<
         replies.pop_front().expect("unexpected worker call")
     });
     let quiet = Arc::new(AudezeWatch::new(Box::new(|| Some(vec![])), Duration::from_secs(60)));
-    (App::new(true, session_path, quiet, runner).unwrap(), calls)
+    (App::new(true, data_dir, quiet, runner), calls)
 }
 
 fn controls_reply() -> Value {
@@ -495,7 +495,6 @@ fn a_control_write_updates_the_cached_read() {
         (status["controls"]["volume_limiter"].clone(), status["controls"]["amp_gain"].clone()),
         (json!(true), json!(136))
     );
-    assert_eq!(app.live_state, "unchanged");
 }
 
 #[test]
@@ -510,56 +509,38 @@ fn an_interrupted_control_write_forgets_the_last_read() {
 }
 
 #[test]
-fn switching_presets_waits_for_sent_eq_to_be_restored() {
-    let (mut app, calls) = app(None, vec![]);
-    app.backup = json!({"state": {"slot": 0, "saved_coefficients_hex": "11"}});
-    for (live, storage) in [("applied", "unchanged"), ("unchanged", "saved"), ("uncertain", "uncertain")] {
-        (app.live_state, app.storage_state) = (live.into(), storage.into());
-        let error = app.perform("/api/preset/select", &json!({"index": 3})).unwrap_err();
-        assert!(error.to_string().contains("Restore the original EQ first"), "{error}");
-    }
-    assert!(calls.lock().unwrap().is_empty());
-}
-
-#[test]
-fn switching_to_a_built_in_preset_drops_the_old_backup() {
+fn switching_to_a_built_in_preset_reads_the_headset_again() {
     let switched = written("preset", json!({"index": 3, "name": "Bass Boost", "custom": false}), json!({"index": 7}));
-    let read = json!({"index": 3, "slot": null, "device": {"path": "p"}});
+    let read = json!({"index": 3, "slot": null, "device": {"path": "p"}, "transport": "usb"});
     let (mut app, calls) = app(None, vec![Ok(switched), Ok(read)]);
-    app.backup = json!({"state": {"slot": 0, "saved_coefficients_hex": "11"}});
-    app.backup_path = json!("old.json");
     let result = app.perform("/api/preset/select", &json!({"index": 3})).unwrap();
-    assert!(result["message"].as_str().unwrap().starts_with("Switched to Bass Boost."));
+    assert!(result["message"].as_str().unwrap().starts_with("Switched to Bass Boost. Make Preset 1 to 4 active"));
     assert_eq!(result["previous"], json!({"index": 7}));
-    assert!(app.backup.is_null() && app.backup_path.is_null());
+    assert_eq!(app.index, json!(3));
     let calls = calls.lock().unwrap();
-    assert_eq!(calls[0], json!({"operation": "control_write", "control": "preset", "value": 3, "transport": "usb"}));
-    assert_eq!(calls[1], json!({"operation": "read", "transport": "usb"}));
+    assert_eq!(calls[0], json!({"operation": "control_write", "control": "preset", "value": 3, "transport": "auto"}));
+    assert_eq!(calls[1], json!({"operation": "read", "transport": "auto"}));
 }
 
 #[test]
-fn switching_to_a_custom_preset_backs_it_up() {
-    let dir = std::env::temp_dir().join(format!("maxwell-peq-controls-{}", maxwell_core::util::token_hex8()));
-    std::fs::create_dir_all(dir.join("backups")).unwrap();
+fn switching_to_a_custom_preset_keeps_its_saved_profile() {
     let switched = written("preset", json!({"index": 8, "name": "EQ 2", "custom": true}), json!({"index": 2}));
     let blob = hex::encode(vec![0u8; SAVED_BYTES]);
-    let read =
-        json!({"index": 8, "slot": 1, "raw_ui_hex": "aa", "saved_coefficients_hex": blob, "device": {"path": "p"}});
-    let (mut app, _) = app(Some(dir.join("backups").join("session.json")), vec![Ok(switched), Ok(read)]);
-    let result = app.perform("/api/preset/select", &json!({"index": 8}));
-    let _ = std::fs::remove_dir_all(&dir);
-    let result = result.unwrap();
-    assert_eq!(result["message"], json!("Switched to EQ 2. Its saved EQ is backed up, so you can edit it here."));
-    assert_eq!(app.backup["state"]["slot"], json!(1));
-    assert_eq!(app.expected["index"], json!(8));
+    let read = json!({"index": 8, "slot": 1, "raw_ui_hex": "aa", "saved_coefficients_hex": blob,
+                      "device": {"path": "p"}, "transport": "usb"});
+    let (mut app, _) = app(None, vec![Ok(switched), Ok(read)]);
+    app.links[1] = json!({"profile_id": "p1", "name": "Mine", "preset": {}, "blob_hex": blob});
+    let result = app.perform("/api/preset/select", &json!({"index": 8})).unwrap();
+    assert_eq!(result["message"], json!("Switched to EQ 2."));
+    assert_eq!(app.index, json!(8));
+    assert_eq!(app.links[1]["profile_id"], json!("p1"));
 }
 
 #[test]
 fn offline_mode_blocks_controls() {
     let quiet = Arc::new(AudezeWatch::new(Box::new(|| Some(vec![])), Duration::from_secs(60)));
     let mut app =
-        App::new(false, None, quiet, Box::new(|_: Worker, _: &Value| -> Result<Value> { panic!("no worker calls") }))
-            .unwrap();
+        App::new(false, None, quiet, Box::new(|_: Worker, _: &Value| -> Result<Value> { panic!("no worker calls") }));
     for path in ["/api/controls/read", "/api/controls/set", "/api/preset/select"] {
         assert!(app.perform(path, &json!({})).unwrap_err().to_string().contains("--offline"));
     }

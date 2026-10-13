@@ -100,6 +100,6 @@ fn built_in_encoder_matches_the_dll() {
         "the DLL built these but the built-in encoder failed: {built_in_failures:#?}"
     );
     assert!(compared > 150);
-    // Each curve is within 0.15 dB of the ideal response, so they can differ by up to 0.3.
-    assert!(worst < 0.3, "worst response difference {worst} dB");
+    // Each curve is within 0.5 dB of the ideal response, so they can differ by up to 1.
+    assert!(worst < 1.0, "worst response difference {worst} dB");
 }

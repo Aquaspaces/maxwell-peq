@@ -13,6 +13,10 @@ use std::f64::consts::PI;
 /// The blob's size: a u32 bank count, then four banks of id, length and 103 words.
 pub const BLOB_BYTES: usize = 844;
 
+/// The largest sampled difference from the ideal response a bank may have.
+/// Narrow sub-bass peaks reach about 0.5 dB at 88.2 and 96 kHz on the 24-bit grid.
+const MAX_ERROR_DB: f64 = 0.5;
+
 /// `peq.number`: a finite number in range, never a bool.
 pub fn number(value: Option<&Value>, name: &str, low: f64, high: f64) -> Result<f64> {
     let Some(Value::Number(value)) = value else {
@@ -210,7 +214,7 @@ fn build(filters: &[Filter], preamp: f64, vendor: Option<&Vendor>, dll: bool) ->
                 points.push(json!([float(frequency), float(actual)]));
             }
         }
-        if error > 0.15 {
+        if error > MAX_ERROR_DB {
             return Err(Error::value(format!(
                 "Coefficient precision error is {error:.3} dB at {rate} Hz; try a higher frequency, smaller gain, or lower Q where adjustable."
             )));

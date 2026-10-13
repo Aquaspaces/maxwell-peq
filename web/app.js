@@ -5,11 +5,11 @@ const TYPES = {peak: 'Peak', low_shelf: 'Low shelf', high_shelf: 'High shelf', l
 const MAX_FILTERS = 10;
 
 const state = {
-  token: null, status: null, transportDirty: false, busy: null,
+  token: null, status: null, busy: null,
   library: {profiles: [], active: null}, preset: null, selected: 0,
   history: new Map(), committed: null,
-  compiled: null, compileError: null, attempted: new Set(),
-  audezeDismissed: false, recoveryShown: false, profileKey: '',
+  compiled: null, compileError: null,
+  audezeDismissed: false, profileKey: '', slotKey: '',
 };
 
 /* ---------- formatting ---------- */
@@ -149,8 +149,6 @@ async function activate(id) {
   await flushSave();
   const previous = state.library.active;
   state.library.active = id;
-  const profile = activeProfile();
-  state.attempted.delete(canon(profile.preset));
   state.selected = 0;
   loadActive();
   api('/api/profiles/activate', {id}).catch(error => {
@@ -360,7 +358,7 @@ function compileNow() {
   clearTimeout(compileTimer);
   const sig = signature();
   if (problems().length) { renderEditorState(); return Promise.resolve(null); }
-  if (state.compiled?.signature === sig) { maybeAutoApply(); return Promise.resolve(state.compiled); }
+  if (state.compiled?.signature === sig) return Promise.resolve(state.compiled);
   const request = payload();
   return queue(async () => {
     if (signature() !== sig) return null;
@@ -371,128 +369,208 @@ function compileNow() {
     } catch (error) {
       state.compileError = {signature: sig, message: error.message};
     }
-    if (signature() === sig) { renderGraph(); renderEditorState(); renderDevice(); maybeAutoApply(); }
+    if (signature() === sig) { renderGraph(); renderEditorState(); }
     return state.compiled?.signature === sig ? state.compiled : null;
   });
 }
 
 /* ---------- device ---------- */
 const status = () => state.status || {};
-function deviceReady() {
-  const s = status();
-  return !!(s.live_enabled && s.backup_exists && !s.audeze_running && !state.transportDirty
-    && s.live_state !== 'uncertain' && s.storage_state !== 'uncertain');
+// Custom presets are indexes 7 to 10; the Audeze app calls them Preset 1 to 4.
+const FIRST_CUSTOM = 7;
+const PROFILE_TYPE = 'application/x-maxwell-profile';
+const customActive = () => status().index >= FIRST_CUSTOM && status().index <= FIRST_CUSTOM + 3;
+const slotList = () => status().slots || [];
+const presetName = slot => `Preset ${slot + 1}`;
+const headsetBlocked = () => !status().live_enabled || !!status().audeze_running;
+const profileSignature = profile => profile.id === state.library.active ? signature() : canon(profile.preset);
+
+// What a preset holds, as far as this app knows.
+function slotView(slot) {
+  const profile = slot.profile_id ? state.library.profiles.find(p => p.id === slot.profile_id) : null;
+  return {
+    slot: slot.slot, active: !!slot.active, linked: !!slot.profile_id,
+    name: profile?.name ?? slot.name ?? null, profileId: profile?.id ?? null,
+    edited: !!profile && !!slot.preset && profileSignature(profile) !== canon(slot.preset),
+  };
 }
-const liveSignature = () => status().live_state === 'applied' ? canon(status().last_profile) : null;
-const savedSignature = () => status().storage_state === 'saved' ? canon(status().saved_profile) : null;
 
-function maybeAutoApply() {
-  const sig = signature();
-  if (!$('auto-apply').checked || !deviceReady() || state.busy || state.compiled?.signature !== sig) return;
-  if (liveSignature() === sig || state.attempted.has(sig)) return;
-  state.attempted.add(sig);
-  deviceOp('apply', {quiet: true});
-}
-
-const DEVICE_OPS = {
-  connect: {path: '/api/read_device', label: 'Reading…'},
-  apply: {path: '/api/apply', label: 'Applying…'},
-  save: {path: '/api/save', label: 'Saving…'},
-  restore: {path: '/api/restore', label: 'Restoring…'},
-  restoreSaved: {path: '/api/restore_saved', label: 'Restoring…'},
-};
-
-async function deviceOp(kind, {quiet = false} = {}) {
-  const op = DEVICE_OPS[kind];
-  const sends = kind === 'apply' || kind === 'save';
-  let request = {};
-  if (sends) {
-    const ready = await compileNow();
-    if (!ready) { if (!quiet) toast(state.compileError?.message || 'Fix the highlighted filters first.', 'error'); return; }
-    request = payload();
-    if (canon(request) !== ready.signature) return;
-  } else if (kind === 'connect') request = {transport: $('transport').value};
+// Device requests run one at a time; each ends with a fresh status.
+function headsetTask(busy, path, body, {quiet = false} = {}) {
   return queue(async () => {
-    if (sends && canon(request) !== signature()) return;
-    state.busy = kind; renderDevice();
+    state.busy = busy; renderDevice();
     try {
-      const result = await api(op.path, request);
-      if (kind === 'connect') {
-        state.transportDirty = false;
-        toast(result.message, result.backup_exists ? 'success' : 'warn');
-      } else if (!quiet) toast(result.message, 'success');
-      if (kind === 'restore' || kind === 'restoreSaved') state.attempted.add(signature());
+      const result = await api(path, {...body, transport: $('transport').value});
+      if (!quiet) toast(result.message, 'success');
+      return result;
     } catch (error) {
       toast(error.message, 'error');
+      return null;
     } finally {
       state.busy = null;
       await refreshStatus().catch(() => {});
+      renderDevice();
     }
-    if (kind === 'connect') maybeAutoApply();
   });
 }
 
+async function readHeadset({quiet = false} = {}) {
+  const result = await headsetTask('connect', '/api/read_device', {}, {quiet: true});
+  if (result && (!quiet || !result.custom)) toast(result.message, result.custom ? 'success' : 'warn');
+}
+
+async function saveToSlot(id, slot) {
+  const profile = state.library.profiles.find(p => p.id === id);
+  if (!profile || state.busy || headsetBlocked()) return;
+  await flushSave();
+  const preset = payload(id === state.library.active ? state.preset : profile.preset);
+  const issues = problems(preset);
+  if (issues.length) { toast(`Fix “${profile.name}” first. ${issues[0].text}`, 'error'); return; }
+  await headsetTask(`save:${slot}`, '/api/save', {preset, slot, profile_id: id, name: profile.name});
+}
+
+function selectSlot(slot) {
+  if (state.busy || headsetBlocked()) return;
+  return headsetTask(`select:${slot}`, '/api/select', {index: FIRST_CUSTOM + slot});
+}
+
 function deviceView() {
-  const s = status(), sig = signature();
+  const s = status();
   if (!state.status) return {tone: 'idle', line: 'Connecting to the editor…', detail: ''};
   if (!s.live_enabled) return {tone: 'idle', line: 'Offline', detail: 'Started with --offline. Edits are previewed, never sent to the headset.'};
   if (s.audeze_running) return {tone: 'warn', line: 'Paused: Audeze App/HQ is open',
     detail: 'Custom PEQ will not work while it is open. Close it to use the headset.', audeze: true};
-  if (s.storage_state === 'uncertain') return {tone: 'error', line: 'The last save was not confirmed',
-    detail: 'Open Restore and choose Restore saved preset before sending more EQ.'};
-  if (s.live_state === 'uncertain') return {tone: 'error', line: 'The last change was not confirmed',
-    detail: 'Open Restore and choose Restore live EQ before sending more EQ.'};
-  if (state.transportDirty) return {tone: 'idle', line: 'Connection changed', detail: 'Read the headset again through this connection before sending EQ.'};
-  if (!s.backup_exists) return {tone: 'idle', line: 'Headset not read yet',
-    detail: 'Connect & back up saves your current custom preset so it can always be restored.'};
-  const live = liveSignature(), saved = savedSignature();
-  const device = s.device || 'Audeze Maxwell';
-  if (live === sig) return {tone: 'ok', line: device, detail: saved === sig ? 'Playing this profile. It is also saved on the headset.' : 'Playing this profile live. Headset storage is unchanged.'};
-  if (s.live_state === 'applied') {
-    const playing = state.library.profiles.find(p => canon(p.preset) === live);
-    return {tone: 'ok', line: device, detail: playing ? `Playing “${playing.name}”. This profile differs.` : 'Playing an earlier version of this profile.'};
-  }
-  if (s.storage_state === 'saved') return {tone: 'ok', line: device, detail: 'Headset is playing its saved custom preset.'};
-  return {tone: 'ok', line: device, detail: 'Headset is playing your original preset. Backup ready.'};
+  if (!s.device_read) return {tone: 'idle', line: 'Headset not read yet', detail: 'Read the headset to see which preset is active.'};
+  const device = s.device || 'Original Maxwell';
+  if (!customActive()) return {tone: 'warn', line: device, detail: 'This preset is built in. Make Preset 1 to 4 active to hear your profiles.'};
+  const active = slotList().find(slot => slot.active);
+  const view = active ? slotView(active) : null;
+  if (!view?.name) return {tone: 'ok', line: device, detail: 'Playing EQ that was not saved from here.'};
+  return {tone: 'ok', line: device, detail: view.edited
+    ? `Playing “${view.name}” as it was saved. Later edits are not on the headset.`
+    : `Playing “${view.name}”.`};
 }
 
 function renderDevice() {
-  const s = status(), view = deviceView(), sig = signature();
+  const s = status(), view = deviceView();
   $('status-dot').dataset.tone = view.tone;
   $('device-line').textContent = view.line;
   $('device-detail').textContent = view.detail;
-  const live = !!s.live_enabled, busy = !!state.busy, readable = s.storage_state !== 'uncertain';
-  const blocked = !live || s.audeze_running;
-  const current = state.compiled?.signature === sig && !problems().length;
-  const uncertain = s.live_state === 'uncertain' || s.storage_state === 'uncertain';
+  const live = !!s.live_enabled, busy = !!state.busy;
+  const blocked = headsetBlocked();
 
-  $('transport').disabled = busy || blocked || !readable;
-  if (!state.transportDirty && s.transport) $('transport').value = s.transport;
+  $('transport').disabled = busy || blocked;
+  if (s.transport && state.busy !== 'connect') $('transport').value = s.transport;
   $('connect').hidden = !live;
-  $('connect').disabled = busy || blocked || !readable;
-  $('connect').textContent = state.busy === 'connect' ? DEVICE_OPS.connect.label : s.backup_exists && !state.transportDirty ? 'Read again' : 'Connect & back up';
-  $('connect').classList.toggle('primary', !s.backup_exists || state.transportDirty);
-  $('connect').title = readable ? '' : 'Restore the saved preset through this connection before switching.';
-  for (const id of ['apply', 'save-headset', 'restore-menu-button']) $(id).hidden = !live;
-  $('apply').disabled = busy || !deviceReady() || !current || liveSignature() === sig;
-  $('apply').textContent = state.busy === 'apply' ? DEVICE_OPS.apply.label : 'Apply';
-  $('apply').hidden = !live || $('auto-apply').checked;
-  $('save-headset').disabled = busy || !deviceReady() || !current || savedSignature() === sig;
-  $('save-headset').textContent = state.busy === 'save' ? DEVICE_OPS.save.label : 'Save to headset…';
-  const canRestore = !busy && live && !s.audeze_running && s.backup_exists && !state.transportDirty;
-  $('restore-live').disabled = !canRestore || s.storage_state === 'uncertain' || (s.live_state === 'unchanged' && !uncertain);
-  $('restore-saved').disabled = !canRestore || s.storage_state === 'unchanged';
-  $('restore-menu-button').disabled = $('restore-live').disabled && $('restore-saved').disabled;
-  $('restore-menu-button').classList.toggle('attention', uncertain);
-  $('auto-apply').closest('.switch').hidden = !live;
+  $('connect').disabled = busy || blocked;
+  $('connect').textContent = state.busy === 'connect' ? 'Reading…' : s.device_read ? 'Read again' : 'Read headset';
+  $('connect').classList.toggle('primary', !s.device_read);
 
   const showBanner = !!s.audeze_running && !state.audezeDismissed && live;
   $('audeze-banner').hidden = !showBanner;
   $('show-audeze').hidden = !(view.audeze && state.audezeDismissed);
   $('open-balance').hidden = !live;
+  renderSlots();
   $('open-headset').hidden = !live;
   renderBalance();
   renderHeadset();
+}
+
+// A profile box: click to edit it, drag it onto a preset to save it there.
+function profileChip(p) {
+  const chip = document.createElement('div');
+  chip.className = 'chip'; chip.dataset.id = p.id;
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'chip-button';
+  if (p.id === state.library.active) button.setAttribute('aria-current', 'true');
+  const name = document.createElement('span'); name.className = 'chip-label'; name.textContent = p.name;
+  button.append(name);
+  button.title = status().live_enabled ? `${p.name}. Click to edit, or drag onto a preset to save it there.` : p.name;
+  button.addEventListener('click', () => activate(p.id));
+  button.draggable = true;
+  button.addEventListener('dragstart', event => {
+    event.dataTransfer.setData(PROFILE_TYPE, p.id);
+    event.dataTransfer.effectAllowed = 'copy';
+    document.body.classList.add('dragging-profile');
+  });
+  button.addEventListener('dragend', () => document.body.classList.remove('dragging-profile'));
+  const more = document.createElement('button');
+  more.type = 'button'; more.className = 'icon-button more';
+  more.setAttribute('aria-label', `More actions for ${p.name}`); more.setAttribute('aria-haspopup', 'menu');
+  more.innerHTML = '<svg><use href="#i-more"/></svg>';
+  more.addEventListener('click', event => { event.stopPropagation(); openProfileMenu(p.id, more); });
+  chip.append(button, more);
+  return chip;
+}
+
+function renderSlots() {
+  const s = status(), blocked = headsetBlocked(), locked = blocked || !!state.busy;
+  $('slots').hidden = !s.live_enabled;
+  const views = slotList().map(slotView);
+  const key = JSON.stringify([views, state.busy, blocked, state.library.active]);
+  if (key === state.slotKey) return;
+  state.slotKey = key;
+  const focused = document.activeElement?.closest?.('.slot')?.dataset.slot;
+
+  const list = $('slot-list');
+  list.replaceChildren();
+  for (const view of views) {
+    const item = document.createElement('li');
+    item.className = 'slot'; item.dataset.slot = view.slot;
+    item.classList.toggle('active', view.active);
+    item.classList.toggle('locked', locked);
+
+    const pick = document.createElement('button');
+    pick.type = 'button'; pick.className = 'slot-select';
+    pick.classList.toggle('pending', state.busy === `select:${view.slot}`);
+    const dot = document.createElement('span'); dot.className = 'slot-dot'; dot.setAttribute('aria-hidden', 'true');
+    pick.append(dot, presetName(view.slot));
+    pick.setAttribute('aria-pressed', String(view.active));
+    pick.title = view.active ? `${presetName(view.slot)} is active` : `Make ${presetName(view.slot)} active`;
+    pick.disabled = locked && !view.active;
+    pick.addEventListener('click', () => { if (!view.active) selectSlot(view.slot); });
+
+    const link = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    link.classList.add('slot-link'); link.setAttribute('aria-hidden', 'true');
+    link.innerHTML = '<use href="#i-link"/>';
+    link.classList.toggle('empty', !view.name);
+
+    const target = document.createElement('div'); target.className = 'slot-target';
+    const profile = view.profileId && state.library.profiles.find(p => p.id === view.profileId);
+    if (state.busy === `save:${view.slot}`) target.append(Object.assign(document.createElement('span'), {className: 'slot-empty', textContent: 'Saving…'}));
+    else if (profile) target.append(profileChip(profile));
+    else if (view.name) target.append(Object.assign(document.createElement('span'), {className: 'slot-empty', textContent: view.name, title: 'This profile was deleted from this computer.'}));
+    else target.append(Object.assign(document.createElement('span'), {className: 'slot-empty', textContent: 'Drop a profile here'}));
+    item.append(pick, link, target);
+
+    if (view.edited && state.busy !== `save:${view.slot}`) {
+      const note = document.createElement('p'); note.className = 'slot-note';
+      note.append('Edited since saving · ');
+      const update = document.createElement('button');
+      update.type = 'button'; update.className = 'link-button'; update.textContent = 'Update';
+      update.setAttribute('aria-label', `Save “${view.name}” to ${presetName(view.slot)} again`);
+      update.disabled = locked;
+      update.addEventListener('click', () => saveToSlot(view.profileId, view.slot));
+      note.append(update);
+      item.append(note);
+    }
+
+    const accepts = event => [...(event.dataTransfer?.types || [])].includes(PROFILE_TYPE) && !state.busy && !headsetBlocked();
+    item.addEventListener('dragover', event => {
+      if (!accepts(event)) return;
+      event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+      item.classList.add('drop');
+    });
+    item.addEventListener('dragleave', event => { if (!item.contains(event.relatedTarget)) item.classList.remove('drop'); });
+    item.addEventListener('drop', event => {
+      item.classList.remove('drop');
+      if (!accepts(event)) return;
+      event.preventDefault();
+      saveToSlot(event.dataTransfer.getData(PROFILE_TYPE), view.slot);
+    });
+    list.append(item);
+  }
+  if (focused) list.querySelector(`[data-slot="${focused}"] .slot-select`)?.focus();
 }
 
 /* ---------- balance ---------- */
@@ -678,13 +756,11 @@ function renderHeadset() {
   $('hs-sidetone-level').disabled = off || !c.sidetone_max;
   for (const radio of document.getElementsByName('hs-noise')) radio.disabled = off;
 
-  // The headset loads the new preset's own EQ, so EQ sent from here has to be put back first.
-  const eqSent = s.live_state !== 'unchanged' || s.storage_state !== 'unchanged';
-  $('hs-preset').disabled = off || eqSent;
+  // Presets 1 to 4 keep the profiles saved to them; the headset loads each preset's own EQ.
+  $('hs-preset').disabled = off;
   $('hs-preset-note').textContent = !c ? ''
-    : eqSent ? 'Restore the original EQ before switching. It belongs to the preset that is active now.'
-      : c.preset?.custom ? 'Switching reads the new preset and backs up its EQ.'
-        : 'Built-in presets can’t be edited. Switch to EQ 1 to EQ 4 to send your own EQ.';
+    : c.preset?.custom ? 'Switching plays the EQ saved on that preset.'
+      : 'Built-in presets can’t be edited. Switch to Preset 1 to 4 to hear your profiles.';
 
   $('headset-read').disabled = busy || blocked;
   $('headset-read').textContent = mine && state.headsetAction === 'read' ? 'Reading…' : c ? 'Read again' : 'Read headset';
@@ -712,7 +788,7 @@ async function headsetOp(action, body = {}) {
     try {
       const result = await api(path, request);
       let text = '';
-      if (action === 'preset') { state.transportDirty = false; text = result.message; }
+      if (action === 'preset') text = result.message;
       else if (action === 'set') {
         const label = CONTROL_LABEL[body.control], shown = controlText(body.control, result.value);
         text = result.changed ? `${label} set to ${shown}.` : `${label} was already ${shown}.`;
@@ -737,12 +813,8 @@ async function refreshStatus() {
   const wasRunning = state.status?.audeze_running, encoder = state.status?.encoder;
   state.status = result; state.token = result.token;
   if (wasRunning && !result.audeze_running) state.audezeDismissed = false;
-  if (result.session_recovered && !state.recoveryShown && (result.live_state !== 'unchanged' || result.storage_state !== 'unchanged')) {
-    state.recoveryShown = true;
-    toast('Recovered the last session. Your original preset backup is still available under Restore.', 'info');
-  }
   if (state.preset) {
-    renderDevice(); renderProfiles(); maybeAutoApply();
+    renderDevice(); renderProfiles();
     if (encoder !== result.encoder) renderEditorState();
   }
   return result;
@@ -760,39 +832,29 @@ function pollStatus() {
 }
 
 /* ---------- rendering ---------- */
+// With a headset, profiles saved to a preset sit in its row; the rest stay here.
 function renderProfiles() {
-  const live = liveSignature(), saved = savedSignature();
-  const rows = state.library.profiles.map((p, i) => {
-    const sig = p.id === state.library.active ? signature() : canon(p.preset);
-    return {p, i, live: !!live && sig === live, saved: !!saved && sig === saved};
-  });
-  const key = JSON.stringify([state.library.active, rows.map(r => [r.p.id, r.p.name, r.live, r.saved])]);
+  const s = status(), live = !!s.live_enabled;
+  const linked = new Set(live ? slotList().map(slot => slot.profile_id).filter(Boolean) : []);
+  const pool = state.library.profiles.filter(p => !linked.has(p.id));
+  const hint = !live ? ''
+    : s.audeze_running ? 'Close Audeze App/HQ to change presets.'
+    : pool.length ? 'Drag a profile onto a preset to save it there.'
+    : 'Every profile is on the headset. Use + to make another.';
+  $('slot-hint').hidden = !hint; $('slot-hint').textContent = hint;
+  const key = JSON.stringify([live, state.library.active, pool.map(p => [p.id, p.name])]);
   if (key === state.profileKey) return;
   state.profileKey = key;
+  $('profiles-heading').textContent = live ? 'Not on the headset' : 'Profiles';
   const list = $('profile-list');
-  const focused = document.activeElement?.closest?.('.profile-item')?.dataset.id;
+  const focused = document.activeElement?.closest?.('#profile-list .chip')?.dataset.id;
   list.replaceChildren();
-  for (const {p, i, live: isLive, saved: isSaved} of rows) {
+  for (const p of pool) {
     const item = document.createElement('li');
-    item.className = 'profile-item'; item.dataset.id = p.id;
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'profile-button';
-    if (p.id === state.library.active) button.setAttribute('aria-current', 'true');
-    const name = document.createElement('span'); name.className = 'profile-label'; name.textContent = p.name;
-    button.append(name);
-    if (isLive) { const badge = document.createElement('span'); badge.className = 'badge live'; badge.textContent = 'Live'; button.append(badge); }
-    if (isSaved) { const badge = document.createElement('span'); badge.className = 'badge saved'; badge.textContent = 'Saved'; button.append(badge); }
-    if (i < 9) { const key = document.createElement('kbd'); key.textContent = `Ctrl+${i + 1}`; key.setAttribute('aria-hidden', 'true'); button.append(key); }
-    button.addEventListener('click', () => activate(p.id));
-    const more = document.createElement('button');
-    more.type = 'button'; more.className = 'icon-button more';
-    more.setAttribute('aria-label', `More actions for ${p.name}`); more.setAttribute('aria-haspopup', 'menu');
-    more.innerHTML = '<svg><use href="#i-more"/></svg>';
-    more.addEventListener('click', event => { event.stopPropagation(); openProfileMenu(p.id, more); });
-    item.append(button, more);
+    item.append(profileChip(p));
     list.append(item);
   }
-  if (focused) list.querySelector(`[data-id="${CSS.escape(focused)}"] .profile-button`)?.focus();
+  if (focused) list.querySelector(`[data-id="${CSS.escape(focused)}"] .chip-button`)?.focus();
 }
 
 function renderEditorState() {
@@ -828,7 +890,7 @@ function renderEditorState() {
   else note.textContent = '';
 
   $('graph-source').textContent = issues.length ? 'Estimated response · fix the highlighted values'
-    : error ? 'Estimated response · could not compile'
+    : error ? `Estimated response · not sent: ${error}`
     : compiled ? `Compiled 48 kHz response, before preamp · fit error ≤ ${compiled.max_error_db.toFixed(3)} dB · not measured`
     : 'Estimated response · compiling…';
 }
@@ -840,7 +902,6 @@ function renderAll() {
 /* ---------- menus and dialogs ---------- */
 function closeMenus() {
   for (const menu of document.querySelectorAll('.menu')) menu.hidden = true;
-  $('restore-menu-button').setAttribute('aria-expanded', 'false');
 }
 
 function openMenu(menu, anchor) {
@@ -868,6 +929,8 @@ function menuKeys(event) {
 function openProfileMenu(id, anchor) {
   state.menuProfile = id; state.menuOwner = anchor;
   $('profile-menu').querySelector('[data-action="delete"]').disabled = state.library.profiles.length <= 1;
+  for (const item of $('profile-menu').querySelectorAll('[data-action^="slot:"]')) item.disabled = !!state.busy || headsetBlocked();
+  for (const item of $('profile-menu').querySelectorAll('[data-action^="slot:"], .menu-separator')) item.hidden = !status().live_enabled;
   openMenu($('profile-menu'), anchor);
 }
 
@@ -888,7 +951,9 @@ async function profileAction(action) {
   const id = state.menuProfile, profile = state.library.profiles.find(p => p.id === id);
   closeMenus();
   if (!profile) return;
-  if (action === 'rename') {
+  if (action.startsWith('slot:')) {
+    await saveToSlot(id, Number(action.slice(5)));
+  } else if (action === 'rename') {
     await activate(id);
     $('profile-name').focus(); $('profile-name').select();
   } else if (action === 'duplicate') {
@@ -1070,7 +1135,7 @@ function wire() {
     const profile = activeProfile(), value = name.value.trim();
     if (!value || value === profile.name) { name.value = profile.name; return; }
     profile.name = value; name.value = value;
-    state.profileKey = ''; renderProfiles();
+    state.profileKey = ''; renderProfiles(); renderDevice();
     persist(profile.id, {name: value});
   });
 
@@ -1083,42 +1148,12 @@ function wire() {
     if (action) profileAction(action);
   });
   $('profile-menu').addEventListener('keydown', menuKeys);
-  $('restore-menu').addEventListener('keydown', menuKeys);
-  $('restore-menu-button').addEventListener('click', event => {
-    event.stopPropagation();
-    if (!$('restore-menu').hidden) { closeMenus(); return; }
-    state.menuOwner = $('restore-menu-button');
-    openMenu($('restore-menu'), $('restore-menu-button'));
-    $('restore-menu-button').setAttribute('aria-expanded', 'true');
-  });
   document.addEventListener('click', event => { if (!event.target.closest('.menu')) closeMenus(); });
   window.addEventListener('blur', closeMenus);
 
-  $('auto-apply').addEventListener('change', () => {
-    localStorage.setItem('maxwell-peq.auto-apply', $('auto-apply').checked ? '1' : '0');
-    state.attempted.clear(); renderDevice(); maybeAutoApply();
-  });
-  $('auto-apply').checked = localStorage.getItem('maxwell-peq.auto-apply') !== '0';
-  $('transport').addEventListener('change', () => {
-    state.transportDirty = $('transport').value !== status().transport;
-    renderDevice();
-  });
-  $('connect').addEventListener('click', () => deviceOp('connect'));
-  $('apply').addEventListener('click', () => deviceOp('apply'));
-  $('save-headset').addEventListener('click', async () => {
-    const ok = await confirmDialog({
-      title: `Save “${activeProfile().name}” to the headset?`,
-      body: 'This writes the EQ into the headset’s active custom preset and plays it. Your original preset stays backed up; Restore → Restore saved preset puts it back. Audeze HQ will still show its old slider values, and moving them there replaces this EQ.',
-      ok: 'Save to headset',
-    });
-    if (ok) deviceOp('save');
-  });
-  $('restore-live').addEventListener('click', () => { closeMenus(); deviceOp('restore'); });
-  $('restore-saved').addEventListener('click', async () => {
-    closeMenus();
-    const ok = await confirmDialog({title: 'Restore the saved preset?', body: 'This writes your original preset back into the headset’s custom preset slot and plays it.', ok: 'Restore saved preset'});
-    if (ok) deviceOp('restoreSaved');
-  });
+  localStorage.removeItem('maxwell-peq.auto-apply');
+  $('transport').addEventListener('change', () => readHeadset());
+  $('connect').addEventListener('click', () => readHeadset());
 
   $('close-audeze').addEventListener('click', async () => {
     const button = $('close-audeze');
@@ -1236,6 +1271,8 @@ async function start() {
     return;
   }
   pollStatus();
+  const s = status();
+  if (s.live_enabled && !s.audeze_running) readHeadset({quiet: true});
 }
 
 start();

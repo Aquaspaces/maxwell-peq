@@ -180,7 +180,7 @@ fn run(options: &Options) -> i32 {
         worker::default_runner(exe),
     ) {
         Ok(service) => Arc::new(service),
-        // e.g. a damaged recovery session: keep the files and say where they are.
+        // e.g. a damaged profiles file: keep the files and say where they are.
         Err(error) => {
             alert(&format!("Maxwell PEQ could not start: {error}\n\nData folder: {}", data.display()));
             return 1;

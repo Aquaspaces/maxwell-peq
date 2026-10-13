@@ -45,9 +45,9 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Service {
-    /// Load profiles and recover any interrupted session from `data_dir`.
+    /// Load profiles from `data_dir`.
     pub fn new(enable_live: bool, data_dir: Option<PathBuf>, audeze: Arc<AudezeWatch>, runner: Runner) -> Result<Self> {
-        let app = App::new(enable_live, data_dir.as_deref().map(crate::paths::session_path), audeze.clone(), runner)?;
+        let app = App::new(enable_live, data_dir.clone(), audeze.clone(), runner);
         let profiles = Profiles::load(data_dir.as_deref().map(crate::paths::profiles_path))?;
         Ok(Service { token: app.token.clone(), app: Mutex::new(app), profiles: Mutex::new(profiles), audeze, data_dir })
     }

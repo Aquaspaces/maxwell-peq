@@ -260,12 +260,29 @@ fn precision_guards() {
     if !vendor_available() {
         return;
     }
-    let ten: Vec<Value> = [40, 80, 150, 300, 600, 1200, 2400, 4800, 9600, 16000]
-        .iter()
-        .map(|f| json!({"frequency": f, "gain": -2, "q": 1.2}))
-        .collect();
-    for request in [json!({"filters": ten}), json!({"filters": [row_json("low_shelf", 30.0, -6.0, SHELF_Q)]})] {
-        let error = compile_preset(&request).unwrap_err().to_string();
-        assert!(error.contains("precision error"), "{error}");
-    }
+    let shelf = json!({"filters": [row_json("low_shelf", 30.0, -6.0, SHELF_Q)]});
+    let error = compile_preset(&shelf).unwrap_err().to_string();
+    assert!(error.contains("precision error"), "{error}");
+}
+
+/// An AutoEQ-style set whose 20 Hz peak is 0.48 dB off at 96 kHz.
+#[test]
+fn low_narrow_peaks_compile() {
+    let filters: Vec<Value> = [
+        (20, 3.0, 2.0),
+        (36, -5.8, 1.1),
+        (89, -1.2, 1.9),
+        (210, 4.6, 1.5),
+        (470, -2.4, 1.2),
+        (870, 2.7, 2.0),
+        (1300, -1.7, 1.4),
+        (3900, 3.4, 1.7),
+        (10000, -5.5, 2.0),
+        (15000, -1.8, 0.5),
+    ]
+    .iter()
+    .map(|(f, gain, q)| json!({"frequency": f, "gain": gain, "q": q}))
+    .collect();
+    let result = compile_preset(&json!({"filters": filters})).unwrap();
+    assert!(result["max_error_db"].as_f64().unwrap() < 0.5);
 }

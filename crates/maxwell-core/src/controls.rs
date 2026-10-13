@@ -5,7 +5,7 @@
 //! Like balance, each write changes the headset at once and is read back.
 //! Runs report the value they replaced.
 
-use crate::hid::Transport;
+use crate::hid::{Transport, connect};
 use crate::json::{get, object};
 use crate::protocol::{
     AMP_GAIN, AUTO_OFF, AUTO_OFF_SECONDS, CHAT_MIX, LIMITER_OFF, LIMITER_ON, MAX_CHAT_MIX, MAX_SIDETONE,
@@ -148,20 +148,14 @@ fn read_all(device: &mut dyn Controls, transport: Transport) -> Result<Value> {
     ]))
 }
 
-fn transport(request: &Value) -> Result<Transport> {
-    match get(request, "transport") {
-        None => Ok(Transport::Usb),
-        Some(value) => {
-            value.as_str().and_then(Transport::parse).ok_or_else(|| Error::value("Choose usb or dongle transport."))
-        }
-    }
-}
-
 pub fn execute(request: &Value, open: &mut OpenControls, progress: &mut Progress) -> Result<Value> {
     *progress = Progress::default();
-    let transport = transport(request)?;
+    let requested_transport = crate::hid::requested(request)?;
     match get(request, "operation").and_then(Value::as_str) {
-        Some("controls_read") => return read_all(open(false, transport)?.as_mut(), transport),
+        Some("controls_read") => {
+            let (mut device, transport) = connect(requested_transport, |transport| open(false, transport))?;
+            return read_all(device.as_mut(), transport);
+        }
         Some("control_write") => {}
         _ => return Err(Error::value("Unsupported device operation.")),
     }
@@ -172,7 +166,7 @@ pub fn execute(request: &Value, open: &mut OpenControls, progress: &mut Progress
     if sub != SIDETONE_LEVEL {
         requested(sub, value, 0)?;
     }
-    let mut device = open(true, transport)?;
+    let (mut device, transport) = connect(requested_transport, |transport| open(true, transport))?;
     let max = if sub == SIDETONE_LEVEL { device.read_control(MAX_SIDETONE)? } else { 0 };
     let raw = requested(sub, value, max)?;
     let before = device.read_control(sub)?;

@@ -1,5 +1,4 @@
 //! The session state machine with a fake worker; nothing opens a headset.
-//! Ports tests/test_recovery.py, test_persistent_session.py and the Audeze guard.
 
 use maxwell_core::app::App;
 use maxwell_core::audeze::{AudezeWatch, matching};
@@ -7,7 +6,7 @@ use maxwell_core::worker::{Runner, Worker};
 use maxwell_core::{Error, Result};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -74,385 +73,197 @@ impl Drop for Temp {
     }
 }
 
-mod recovery {
+mod session {
     use super::*;
 
-    fn setup() -> (App, Fake, Value) {
+    fn app() -> (App, Fake) {
         let fake = Fake::default();
-        let mut app = App::new(true, None, quiet(), fake.runner()).unwrap();
-        let snapshot = json!({"saved_coefficients_hex": "1122", "slot": 0});
-        app.backup = json!({"state": snapshot});
-        app.backup_path = json!("test-backup.json");
-        (app, fake, snapshot)
+        (App::new(true, None, quiet(), fake.runner()), fake)
+    }
+
+    fn state(index: u64, saved: &str) -> Value {
+        json!({"index": index, "slot": index.checked_sub(7), "saved_coefficients_hex": saved})
+    }
+
+    fn preset(gain: f64) -> Value {
+        json!({"filters": [{"type": "peak", "frequency": 1000, "gain": gain, "q": 1, "enabled": true}], "preamp": "auto"})
+    }
+
+    fn save(slot: u64, gain: f64) -> Value {
+        json!({"slot": slot, "preset": preset(gain), "profile_id": format!("p{slot}"), "name": format!("Profile {slot}")})
     }
 
     #[test]
-    fn changed_preset_before_send_allows_new_backup() {
-        let (mut app, fake, _) = setup();
-        fake.ok(json!({"blob_hex": "3344"}))
-            .err(worker_error(json!({"error": "Changed preset", "write_started": false, "state_changed": true})));
-        assert!(matches!(app.perform("/api/apply", &json!({})), Err(Error::Worker(_))));
-        assert_eq!(app.live_state, "unchanged");
-        assert!(app.backup.is_null());
-        assert!(app.backup_path.is_null());
-    }
-
-    #[test]
-    fn preflight_disconnect_keeps_existing_live_state() {
-        let (mut app, fake, _) = setup();
-        app.live_state = "applied".into();
-        fake.err(worker_error(json!({"error": "No headset", "write_started": false, "state_changed": false})));
-        assert!(app.perform("/api/restore", &json!({})).is_err());
-        assert_eq!(app.live_state, "applied");
-        assert!(!app.backup.is_null());
-    }
-
-    /// A session that has saved EQ: the headset now holds something other than the backup.
-    fn saved_session(app: &mut App) -> Value {
-        let expected = json!({"index": 10, "slot": 0, "raw_ui_hex": "aa", "saved_coefficients_hex": "3344"});
-        app.expected = expected.clone();
-        (app.live_state, app.storage_state) = ("applied".into(), "saved".into());
-        expected
-    }
-
-    #[test]
-    fn saved_session_can_switch_connection_and_keep_the_backup() {
-        let (mut app, fake, snapshot) = setup();
-        let mut read = saved_session(&mut app);
-        read["device"] = json!({"path": "dongle-new", "transport": "dongle"});
-        fake.ok(read.clone());
-        app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap();
-        assert_eq!(fake.calls(), vec![(Worker::Device, json!({"operation": "read", "transport": "dongle"}))]);
-        assert_eq!(app.transport, "dongle");
-        assert_eq!((app.live_state.as_str(), app.storage_state.as_str()), ("applied", "saved"));
-        assert_eq!(app.backup, json!({"state": snapshot}));
-        assert_eq!(app.backup_path, json!("test-backup.json"));
-        assert_eq!(app.expected, read);
-
-        fake.ok(json!({}));
-        app.perform("/api/restore", &json!({})).unwrap();
-        let (_, request) = &fake.calls()[0];
-        assert_eq!(request["transport"], "dongle");
-        assert_eq!(request["expected"]["device"]["path"], "dongle-new");
-        assert_eq!(request["blob_hex"], "1122");
-    }
-
-    #[test]
-    fn a_different_preset_or_a_failed_read_keeps_the_session() {
-        for field in ["index", "slot", "raw_ui_hex", "saved_coefficients_hex"] {
-            let (mut app, fake, snapshot) = setup();
-            let mut read = saved_session(&mut app);
-            read[field] = json!(9);
-            fake.ok(read);
-            let error = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap_err();
-            assert!(error.to_string().contains("different preset"), "{field}: {error}");
-            assert_eq!(app.transport, "usb");
-            assert_eq!(app.backup, json!({"state": snapshot}));
-            assert_eq!(app.storage_state, "saved");
-        }
-        let (mut app, fake, _) = setup();
-        let expected = saved_session(&mut app);
-        fake.err(Error::other("Disconnected"));
-        assert!(app.perform("/api/read_device", &json!({"transport": "dongle"})).is_err());
-        assert_eq!((app.transport.as_str(), &app.expected), ("usb", &expected));
-    }
-
-    #[test]
-    fn uncertain_storage_blocks_switching_without_reading() {
-        let (mut app, fake, _) = setup();
-        saved_session(&mut app);
-        app.storage_state = "uncertain".into();
-        let error = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap_err();
-        assert!(error.to_string().contains("uncertain"), "{error}");
-        assert!(fake.calls().is_empty());
-    }
-
-    #[test]
-    fn timeout_blocks_apply_but_restore_uses_exact_saved_bytes() {
-        let (mut app, fake, snapshot) = setup();
-        fake.ok(json!({"blob_hex": "3344"})).err(Error::other("Timeout"));
-        assert!(matches!(app.perform("/api/apply", &json!({})), Err(Error::Other(_))));
-        assert_eq!(app.live_state, "uncertain");
-        fake.calls();
-
-        let error = app.perform("/api/apply", &json!({})).unwrap_err();
-        assert!(error.to_string().contains("Restore"), "{error}");
-        assert!(fake.calls().is_empty());
-
-        fake.ok(json!({}));
-        app.perform("/api/restore", &json!({})).unwrap();
+    fn saving_links_the_profile_to_that_preset() {
+        let (mut app, fake) = app();
+        let mut found = state(10, "1122");
+        found["transport"] = json!("usb");
+        fake.ok(json!({"blob_hex": "3344"})).ok(json!({"state": found, "saved_verified": true, "live_applied": false}));
+        let result = app.perform("/api/save", &save(1, -3.0)).unwrap();
+        assert_eq!(result["message"], "Saved to Preset 2. Make it active to hear it.");
+        let calls = fake.calls();
+        assert_eq!(calls[0], (Worker::Compile, preset(-3.0)));
         assert_eq!(
-            fake.calls(),
-            vec![(
-                Worker::Device,
-                json!({"operation": "apply", "blob_hex": "1122", "expected": snapshot, "transport": "usb"})
-            )]
+            calls[1],
+            (Worker::Device, json!({"operation": "save", "slot": 1, "blob_hex": "3344", "transport": "auto"}))
         );
-        assert_eq!(app.live_state, "unchanged");
+        let status = app.status();
+        assert_eq!(status["device"], "Original Maxwell PS · USB-C · Preset 4");
+        assert_eq!(status["index"], 10);
+        assert_eq!(
+            status["slots"][1],
+            json!({"slot": 1, "index": 8, "active": false, "profile_id": "p1", "name": "Profile 1", "preset": preset(-3.0)})
+        );
+        assert_eq!(status["slots"][3]["active"], true);
+        assert!(status["slots"][3]["profile_id"].is_null());
+        // Automatic stays the choice; the connection it found is reported.
+        assert_eq!((&status["transport"], &status["connection"]), (&json!("auto"), &json!("usb")));
+        for gone in ["backup_exists", "last_profile", "saved_profile"] {
+            assert!(status.get(gone).is_none(), "{gone}");
+        }
     }
 
     #[test]
-    fn unacknowledged_write_retains_backup() {
-        let (mut app, fake, _) = setup();
+    fn a_link_lasts_until_the_preset_stores_other_eq() {
+        let (mut app, fake) = app();
+        fake.ok(json!({"blob_hex": "5566"})).ok(json!({"state": state(10, "5566"), "live_applied": true}));
+        let result = app.perform("/api/save", &save(3, 2.0)).unwrap();
+        assert_eq!(result["message"], "Saved to Preset 4. It is playing now.");
+
+        let mut read = state(10, "5566");
+        read["slots"] = json!([null, null, null, "5566"]);
+        fake.ok(read);
+        let result = app.perform("/api/read_device", &json!({})).unwrap();
+        assert_eq!(result["message"], "Headset read. Preset 4 is active.");
+        assert!(result["state"].get("slots").is_none());
+        assert_eq!(app.links[3]["name"], "Profile 3");
+
+        // The Audeze app rewrote the preset: the link goes.
+        fake.ok(state(10, "7788"));
+        app.perform("/api/read_device", &json!({})).unwrap();
+        assert!(app.links[3].is_null());
+    }
+
+    #[test]
+    fn links_are_kept_across_restarts() {
+        let temp = Temp::new();
+        let fake = Fake::default();
+        let mut app = App::new(true, Some(temp.0.clone()), quiet(), fake.runner());
+        fake.ok(json!({"blob_hex": "5566"})).ok(json!({"state": state(10, "1122")}));
+        app.perform("/api/save", &save(0, 1.0)).unwrap();
+        let again = App::new(true, Some(temp.0.clone()), quiet(), fake.runner());
+        assert_eq!(again.links[0]["profile_id"], "p0");
+        assert_eq!(again.links[0]["blob_hex"], "5566");
+        assert!(again.links[1].is_null());
+    }
+
+    #[test]
+    fn select_makes_a_preset_active() {
+        let (mut app, fake) = app();
+        fake.ok(json!({"state": state(8, "1122"), "selected": true}));
+        let result = app.perform("/api/select", &json!({"index": 8, "transport": "dongle"})).unwrap();
+        assert_eq!(result["message"], "Preset 2 is now active.");
+        assert_eq!(fake.calls()[0].1, json!({"operation": "select", "index": 8, "transport": "dongle"}));
+        assert_eq!(app.status()["slots"][1]["active"], true);
+        for index in [json!(6), json!(11), json!("8"), Value::Null] {
+            assert!(app.perform("/api/select", &json!({"index": index})).is_err(), "{index}");
+        }
+        assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn reading_a_built_in_preset_says_how_to_hear_profiles() {
+        let (mut app, fake) = app();
+        fake.ok(state(1, ""));
+        let result = app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap();
+        assert!(result["message"].as_str().unwrap().contains("built-in preset 1"), "{result}");
+        assert_eq!(result["custom"], false);
+        assert_eq!(app.transport, "dongle");
+        assert_eq!(app.device, "Original Maxwell PS · dongle · built-in preset 1");
+        assert!(app.status()["slots"].as_array().unwrap().iter().all(|slot| slot["active"] == false));
+    }
+
+    #[test]
+    fn a_save_that_started_but_was_not_verified_drops_the_link() {
+        let (mut app, fake) = app();
         fake.ok(json!({"blob_hex": "3344"}))
-            .err(worker_error(json!({"error": "Rejected", "write_started": true, "state_changed": false})));
-        assert!(app.perform("/api/apply", &json!({})).is_err());
-        assert_eq!(app.live_state, "uncertain");
-        assert!(!app.backup.is_null());
+            .err(worker_error(json!({"error": "No live ACK", "write_started": true, "saved_verified": true})));
+        assert!(app.perform("/api/save", &save(2, 4.0)).is_err());
+        assert_eq!(app.links[2]["blob_hex"], "3344");
+
+        fake.ok(json!({"blob_hex": "5566"}))
+            .err(worker_error(json!({"error": "Readback mismatch", "write_started": true, "saved_verified": false})));
+        assert!(app.perform("/api/save", &save(2, 5.0)).is_err());
+        assert!(app.links[2].is_null());
     }
 
     #[test]
-    fn compile_failure_does_not_change_device_state() {
-        let (mut app, fake, _) = setup();
+    fn a_refused_save_keeps_the_link() {
+        let (mut app, fake) = app();
+        fake.ok(json!({"blob_hex": "3344"})).ok(json!({"state": state(7, "3344")}));
+        app.perform("/api/save", &save(0, 1.0)).unwrap();
+        fake.ok(json!({"blob_hex": "5566"})).err(worker_error(
+            json!({"error": "Headset reports insufficient profile storage. No EQ was sent.", "write_started": false}),
+        ));
+        assert!(app.perform("/api/save", &save(0, 4.0)).is_err());
+        assert_eq!(app.links[0]["blob_hex"], "3344");
+    }
+
+    #[test]
+    fn bad_saves_send_nothing() {
+        let (mut app, fake) = app();
         fake.err(Error::worker("Invalid filter"));
-        assert!(app.perform("/api/apply", &json!({})).is_err());
-        assert_eq!(app.live_state, "unchanged");
+        assert!(app.perform("/api/save", &save(0, 1.0)).is_err());
         assert_eq!(fake.calls().len(), 1);
+        for slot in [json!(4), json!(-1), Value::Null] {
+            let mut request = save(0, 1.0);
+            request["slot"] = slot;
+            assert!(app.perform("/api/save", &request).is_err());
+        }
+        assert!(fake.calls().is_empty());
     }
 
     #[test]
-    fn offline_mode_blocks_device_access() {
-        let (mut app, fake, _) = setup();
+    fn requests_use_and_remember_their_connection() {
+        let (mut app, fake) = app();
+        let mut request = save(0, 1.0);
+        request["transport"] = json!("dongle");
+        fake.ok(json!({"blob_hex": "3344"})).ok(json!({"state": state(10, "1122")}));
+        app.perform("/api/save", &request).unwrap();
+        assert_eq!(fake.calls()[1].1["transport"], "dongle");
+        assert_eq!(app.transport, "dongle");
+        request["transport"] = json!("bluetooth");
+        assert!(app.perform("/api/save", &request).is_err());
+    }
+
+    #[test]
+    fn balance_writes_are_logged_under_logs() {
+        let temp = Temp::new();
+        let fake = Fake::default();
+        let mut app = App::new(true, Some(temp.0.clone()), quiet(), fake.runner());
+        let read = json!({"left": 141, "right": 141, "source": 1, "source_profile": "usb-c"});
+        fake.ok(read.clone()).ok(json!({"left": 140, "right": 141, "source": 1, "source_profile": "usb-c"}));
+        app.perform("/api/balance/read", &json!({})).unwrap();
+        app.perform("/api/balance/apply", &json!({"left": 140, "right": 141})).unwrap();
+        let logs: Vec<String> = std::fs::read_dir(temp.0.join("logs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(logs.len() == 1 && logs[0].ends_with("-balance_write.json"), "{logs:?}");
+        assert!(!temp.0.join("backups").exists());
+    }
+
+    #[test]
+    fn offline_mode_blocks_device_access_and_old_endpoints_are_gone() {
+        let (mut app, fake) = app();
+        for path in ["/api/restore", "/api/restore_saved", "/api/apply"] {
+            assert!(app.perform(path, &json!({})).unwrap_err().to_string().contains("Unknown endpoint"), "{path}");
+        }
         app.enable_live = false;
-        for path in ["/api/read_device", "/api/apply", "/api/restore"] {
+        for path in ["/api/read_device", "/api/save", "/api/select"] {
             assert!(matches!(app.perform(path, &json!({})), Err(Error::Value(_))), "{path}");
         }
         assert!(fake.calls().is_empty());
-    }
-}
-
-mod persistent {
-    use super::*;
-
-    struct Setup {
-        temp: Temp,
-        path: PathBuf,
-        app: App,
-        fake: Fake,
-        original: String,
-        modified: String,
-        snapshot: Value,
-        preset: Value,
-    }
-
-    impl Setup {
-        fn new() -> Self {
-            let temp = Temp::new();
-            let path = temp.0.join("session.json");
-            let (original, modified) = ("11".repeat(844), "22".repeat(844));
-            let snapshot = json!({"device": {"path": "test-headset", "transport": "usb"}, "index": 7, "slot": 0,
-                                  "raw_ui_hex": "aa", "saved_coefficients_hex": original});
-            let fake = Fake::default();
-            let mut app = App::new(true, Some(path.clone()), quiet(), fake.runner()).unwrap();
-            app.backup = json!({"state": snapshot});
-            app.backup_path = json!(temp.0.join("original.json").display().to_string());
-            app.expected = snapshot.clone();
-            let preset =
-                json!({"filters": [{"type": "peak", "frequency": 1000, "gain": -3, "q": 1}], "preamp": "auto"});
-            Setup { temp, path, app, fake, original, modified, snapshot, preset }
-        }
-
-        fn saved(&self, blob: Option<&str>) -> Value {
-            let mut state = self.snapshot.clone();
-            state["saved_coefficients_hex"] = json!(blob.unwrap_or(&self.modified));
-            json!({"saved_verified": true, "live_applied": true, "state": state})
-        }
-
-        fn reopen(&self) -> Result<App> {
-            App::new(true, Some(self.path.clone()), quiet(), Fake::default().runner())
-        }
-
-        fn audits(&self, suffix: &str) -> usize {
-            std::fs::read_dir(&self.temp.0)
-                .unwrap()
-                .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().ends_with(suffix))
-                .count()
-        }
-    }
-
-    fn read_json(path: &Path) -> Value {
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn save_journal_precedes_write_and_original_survives_restart() {
-        let mut s = Setup::new();
-        let (path, modified, snapshot, saved) = (s.path.clone(), s.modified.clone(), s.snapshot.clone(), s.saved(None));
-        s.fake.ok(json!({"blob_hex": modified})).reply(move |worker, request| {
-            assert_eq!(worker, Worker::Device);
-            let pending = read_json(&path);
-            assert_eq!(pending["storage_state"], "uncertain");
-            assert_eq!(pending["pending"]["blob_hex"], json!(modified));
-            assert_eq!(pending["backup"]["state"], snapshot);
-            assert_eq!(request["operation"], "save");
-            Ok(saved)
-        });
-        s.app.perform("/api/save", &s.preset).unwrap();
-        let restored = s.reopen().unwrap();
-        assert!(restored.session_recovered);
-        assert_eq!(restored.storage_state, "saved");
-        assert_eq!(restored.expected["saved_coefficients_hex"], json!(s.modified));
-        assert_eq!(restored.backup["state"], s.snapshot);
-        assert_eq!(restored.last_profile, s.preset);
-        assert!(restored.pending.is_null());
-        assert_eq!(s.audits("-save.json"), 1);
-    }
-
-    #[test]
-    fn repeat_save_uses_current_expected_and_keeps_original() {
-        let mut s = Setup::new();
-        s.fake.ok(json!({"blob_hex": s.modified})).ok(s.saved(None));
-        s.app.perform("/api/save", &s.preset).unwrap();
-        s.fake.calls();
-        s.fake.ok(json!({"blob_hex": s.modified})).ok(s.saved(None));
-        s.app.perform("/api/save", &s.preset).unwrap();
-        let calls = s.fake.calls();
-        assert_eq!(calls[1].1["expected"]["saved_coefficients_hex"], json!(s.modified));
-        assert_eq!(s.app.backup["state"]["saved_coefficients_hex"], json!(s.original));
-    }
-
-    #[test]
-    fn timeout_recovers_and_compensating_restore_needs_no_compiler() {
-        let mut s = Setup::new();
-        s.fake.ok(json!({"blob_hex": s.modified})).err(Error::other("timeout"));
-        assert_eq!(s.app.perform("/api/save", &s.preset).unwrap_err().to_string(), "timeout");
-
-        let fake = Fake::default();
-        let mut recovered = App::new(true, Some(s.path.clone()), quiet(), fake.runner()).unwrap();
-        assert_eq!(recovered.storage_state, "uncertain");
-        assert_eq!(recovered.live_state, "uncertain");
-        for endpoint in ["/api/apply", "/api/save", "/api/read_device", "/api/restore"] {
-            assert!(matches!(recovered.perform(endpoint, &json!({})), Err(Error::Value(_))), "{endpoint}");
-        }
-        assert!(fake.calls().is_empty());
-
-        fake.ok(s.saved(Some(&s.original)));
-        recovered.perform("/api/restore_saved", &json!({})).unwrap();
-        let calls = fake.calls();
-        assert_eq!(calls.len(), 1, "restore must not compile");
-        assert_eq!(calls[0].0, Worker::Device);
-        assert_eq!(calls[0].1["blob_hex"], json!(s.original));
-        assert_eq!(calls[0].1["operation"], "restore_saved");
-        assert_eq!(recovered.storage_state, "unchanged");
-        assert_eq!(recovered.live_state, "unchanged");
-        assert!(!recovered.backup.is_null());
-    }
-
-    #[test]
-    fn readback_mismatch_is_uncertain_and_keeps_backup() {
-        let mut s = Setup::new();
-        s.fake.ok(json!({"blob_hex": s.modified})).err(worker_error(json!({
-            "error": "Readback mismatch", "write_started": true,
-            "persistent_write_started": true, "saved_verified": false})));
-        assert!(matches!(s.app.perform("/api/save", &s.preset), Err(Error::Worker(_))));
-        assert_eq!(s.app.storage_state, "uncertain");
-        assert_eq!(s.app.expected, s.snapshot);
-        assert_eq!(s.reopen().unwrap().backup["state"], s.snapshot);
-    }
-
-    #[test]
-    fn verified_storage_survives_live_failure() {
-        let mut s = Setup::new();
-        s.fake.ok(json!({"blob_hex": s.modified})).err(worker_error(json!({
-            "error": "Live ACK timeout", "write_started": true, "persistent_write_started": true,
-            "saved_verified": true, "state": s.saved(None)["state"]})));
-        let error = s.app.perform("/api/save", &s.preset).unwrap_err();
-        assert!(error.to_string().contains("Saved coefficients were read back"), "{error}");
-        let recovered = s.reopen().unwrap();
-        assert_eq!(recovered.storage_state, "saved");
-        assert_eq!(recovered.live_state, "uncertain");
-        assert_eq!(recovered.expected["saved_coefficients_hex"], json!(s.modified));
-    }
-
-    #[test]
-    fn unverified_save_result_is_uncertain() {
-        let mut s = Setup::new();
-        let mut result = s.saved(None);
-        result["saved_verified"] = json!(false);
-        s.fake.ok(json!({"blob_hex": s.modified})).ok(result);
-        assert!(matches!(s.app.perform("/api/save", &s.preset), Err(Error::Other(_))));
-        assert_eq!(s.app.storage_state, "uncertain");
-    }
-
-    #[test]
-    fn preflight_failure_preserves_prior_states() {
-        let mut s = Setup::new();
-        (s.app.storage_state, s.app.live_state) = ("saved".into(), "applied".into());
-        s.fake.err(worker_error(json!({"error": "Disconnected", "write_started": false,
-                                       "persistent_write_started": false, "state_changed": true})));
-        assert!(s.app.perform("/api/restore_saved", &json!({})).is_err());
-        assert_eq!(s.app.storage_state, "saved");
-        assert_eq!(s.app.live_state, "applied");
-        assert!(!s.app.backup.is_null());
-    }
-
-    #[test]
-    fn journal_failure_prevents_device_write() {
-        let mut s = Setup::new();
-        // A regular file where the session's directory should be makes every journal write fail.
-        let blocker = s.temp.0.join("blocker");
-        std::fs::write(&blocker, "").unwrap();
-        let fake = Fake::default();
-        let mut app = App::new(true, Some(blocker.join("session.json")), quiet(), fake.runner()).unwrap();
-        (app.backup, app.expected) = (s.app.backup.clone(), s.app.expected.clone());
-        fake.ok(json!({"blob_hex": s.modified}));
-        assert!(matches!(app.perform("/api/save", &s.preset), Err(Error::Other(_))));
-        let calls = fake.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, Worker::Compile);
-        assert_eq!(app.storage_state, "unchanged");
-        assert_eq!(app.live_state, "unchanged");
-        assert!(app.pending.is_null());
-        s.app.storage_state = "unchanged".into();
-    }
-
-    #[test]
-    fn dongle_route_is_explicit_and_preserved() {
-        let mut s = Setup::new();
-        let mut state = s.snapshot.clone();
-        state["device"]["transport"] = json!("dongle");
-        s.fake.ok(state);
-        s.app.perform("/api/read_device", &json!({"transport": "dongle"})).unwrap();
-        assert_eq!(s.fake.calls()[0].1, json!({"operation": "read", "transport": "dongle"}));
-        assert_eq!(s.audits("-slot1.json"), 1);
-
-        let fake = Fake::default();
-        let mut recovered = App::new(true, Some(s.path.clone()), quiet(), fake.runner()).unwrap();
-        fake.ok(json!({}));
-        recovered.perform("/api/restore", &json!({})).unwrap();
-        assert_eq!(fake.calls()[0].1["transport"], "dongle");
-    }
-
-    #[test]
-    fn corrupt_recovery_file_fails_closed() {
-        let s = Setup::new();
-        std::fs::write(&s.path, json!({"version": 1, "live_state": "uncertain"}).to_string()).unwrap();
-        let error = s.reopen().err().expect("must refuse");
-        assert!(error.to_string().contains("Invalid recovery"), "{error}");
-    }
-
-    #[test]
-    fn python_session_file_is_recovered() {
-        // As server.py wrote it: indented, with a BOM-free UTF-8 body and Python key order.
-        let s = Setup::new();
-        let session = json!({"version": 1, "backup": {"state": s.snapshot}, "backup_path": "x.json",
-                             "expected": s.snapshot, "transport": "usb", "device": "Original Maxwell PS · USB-C · preset 7",
-                             "live_state": "applied", "storage_state": "unchanged", "pending": null,
-                             "last_profile": s.preset, "saved_profile": null});
-        std::fs::write(&s.path, serde_json::to_string_pretty(&session).unwrap()).unwrap();
-        let app = s.reopen().unwrap();
-        assert_eq!(app.live_state, "applied");
-        assert_eq!(app.status()["last_profile"], s.preset);
-    }
-
-    #[test]
-    fn offline_mode_blocks_storage_writes() {
-        let mut s = Setup::new();
-        s.app.enable_live = false;
-        for endpoint in ["/api/save", "/api/restore_saved"] {
-            assert!(matches!(s.app.perform(endpoint, &json!({})), Err(Error::Value(_))), "{endpoint}");
-        }
-        assert!(s.fake.calls().is_empty());
     }
 }
 
@@ -464,7 +275,7 @@ mod audeze_guard {
         let fake = Fake::default();
         let watch =
             Arc::new(AudezeWatch::new(Box::new(|| Some(vec!["Audeze HQ.exe".into()])), Duration::from_secs(60)));
-        let mut app = App::new(true, None, watch, fake.runner()).unwrap();
+        let mut app = App::new(true, None, watch, fake.runner());
         let error = app.perform("/api/read_device", &json!({})).unwrap_err();
         assert!(error.to_string().contains("Audeze App/HQ is open"), "{error}");
         assert!(fake.calls().is_empty());
@@ -474,7 +285,7 @@ mod audeze_guard {
 
     #[test]
     fn status_reports_false_when_no_audeze_app_runs() {
-        let app = App::new(true, None, quiet(), Fake::default().runner()).unwrap();
+        let app = App::new(true, None, quiet(), Fake::default().runner());
         assert_eq!(app.status()["audeze_running"], false);
         assert_eq!(app.status()["audeze_apps"], json!([]));
     }
@@ -482,7 +293,7 @@ mod audeze_guard {
     #[test]
     fn unsupported_check_is_not_reported_as_running() {
         let watch = Arc::new(AudezeWatch::new(Box::new(|| None), Duration::from_secs(60)));
-        let app = App::new(true, None, watch, Fake::default().runner()).unwrap();
+        let app = App::new(true, None, watch, Fake::default().runner());
         assert_eq!(app.status()["audeze_running"], false);
     }
 

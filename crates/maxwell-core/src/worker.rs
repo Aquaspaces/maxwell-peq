@@ -19,7 +19,8 @@ pub type Runner = Box<dyn FnMut(Worker, &Value) -> Result<Value> + Send>;
 
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 
-const TIMED_OUT: &str = "Worker timed out; device acceptance is unconfirmed. Use Restore saved preset after a Save, or Restore live EQ after a temporary Apply.";
+const TIMED_OUT: &str =
+    "Worker timed out; the headset may or may not have taken the change. Read the headset to see its state.";
 const INVALID: &str = "Worker did not return a valid result. Device acceptance is unconfirmed.";
 
 /// A worker's JSON result, or `Error::Worker` when it reported failure.
