@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 pub const VENDOR_ID: u16 = 0x3329;
 pub const USAGE_PAGE: u16 = 0xFF13;
 
+pub const LINUX_PERMISSION: &str = "No permission to open the headset. Install 70-maxwell-peq.rules into /etc/udev/rules.d (the .deb and .rpm do this), then unplug and replug the headset or dongle. No EQ was sent.";
+
 pub const BUSY: &str = "The headset control interface is busy. Fully quit Audeze HQ (including its tray icon) and other Maxwell tools, then retry. No EQ was sent.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,11 +427,11 @@ pub use windows::{WinHid, open, open_controls, open_exclusive, open_settings};
 #[cfg(not(windows))]
 pub use hidapi_backend::{open, open_controls, open_settings};
 
-/// hidapi, for macOS. The `hidapi` feature builds it on Windows too, so it
+/// hidapi, for macOS and Linux. The `hidapi` feature builds it on Windows too, so it
 /// can be checked there; Windows itself uses the native module below.
 #[cfg(any(not(windows), feature = "hidapi"))]
 pub mod hidapi_backend {
-    use super::{BUSY, Interface, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
+    use super::{BUSY, Interface, LINUX_PERMISSION, ReportIo, Session, Transport, USAGE_PAGE, VENDOR_ID};
     use crate::balance::Settings;
     use crate::controls::Controls;
     use crate::descriptor::report_sizes;
@@ -457,6 +459,17 @@ pub mod hidapi_backend {
         }
     }
 
+    /// On Linux the usual cause is a root-only `/dev/hidraw*` node, not a busy device.
+    fn open_failure(path: &std::ffi::CStr) -> &'static str {
+        let denied = cfg!(target_os = "linux")
+            && std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path.to_string_lossy().as_ref())
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+        if denied { LINUX_PERMISSION } else { BUSY }
+    }
+
     fn session(transport: Transport, allow_live: bool, allow_persistent: bool) -> Result<Session<HidapiIo>> {
         let api = HidApi::new().map_err(|error| Error::other(format!("Could not start HID access: {error}")))?;
         let found: Vec<_> = api
@@ -475,7 +488,7 @@ pub mod hidapi_backend {
             )));
         }
         let info = found[0];
-        let device = info.open_device(&api).map_err(|_| Error::other(BUSY))?;
+        let device = info.open_device(&api).map_err(|_| Error::other(open_failure(info.path())))?;
         let mut descriptor = vec![0u8; 4096];
         let length = device.get_report_descriptor(&mut descriptor).map_err(|error| Error::other(error.to_string()))?;
         let (input_size, output_size) = report_sizes(&descriptor[..length], USAGE_PAGE)

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"],
+    "linux": {
+      "deb": {
+        "files": { "/usr/lib/udev/rules.d/70-maxwell-peq.rules": "linux/70-maxwell-peq.rules" },
+        "postInstallScript": "linux/udev-reload.sh",
+        "postRemoveScript": "linux/udev-reload.sh"
+      },
+      "rpm": {
+        "files": { "/usr/lib/udev/rules.d/70-maxwell-peq.rules": "linux/70-maxwell-peq.rules" },
+        "postInstallScript": "linux/udev-reload.sh",
+        "postRemoveScript": "linux/udev-reload.sh"
+      },
+      "appimage": {
+        "files": { "/usr/share/maxwell-peq/70-maxwell-peq.rules": "linux/70-maxwell-peq.rules" }
+      }
+    }
+  }
+}

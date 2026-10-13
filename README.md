@@ -1,6 +1,6 @@
 # Maxwell PEQ
 
-Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows and macOS.
+Desktop editor for up to ten filters on the **original Maxwell PlayStation**, connected by USB-C or the PlayStation wireless dongle. Supports peaks, low/high shelves and low/high-pass filters, with a draggable response graph, named profiles, Equalizer APO import/export, automatic preamp headroom, live apply, persistent headset saves with exact readback, restoration from the original saved coefficient bytes, left/right channel balance, onboard preset switching, and the everyday Audeze HQ controls. It runs on Windows, macOS and Linux.
 
 The connected headset's saved custom preset was read and reproduced **byte for byte** across all four sample-rate banks. On 2026-10-12, the user confirmed audible live filtering, changes when adjusting Q, and attenuation of a 1 kHz tone with a narrow -12 dB peak. On 2026-10-13, a rough mic measurement matched the expected peak, shelf and pass responses within about 0.2 dB RMS from 300 Hz to 3 kHz; bass and treble response remain unmeasured. See [PROOF.md](PROOF.md) for the evidence and limits.
 
@@ -10,6 +10,7 @@ Get the latest build from [Releases](https://github.com/Aquaspaces/maxwell-peq/r
 
 - **Windows:** the `-setup.exe` installer, or the bare `MaxwellPEQ.exe`, which runs from any folder without installing.
 - **macOS 11+:** the universal `.dmg` (Apple silicon and Intel). It isn't signed by Apple, so the first launch is blocked: open System Settings → Privacy & Security and choose **Open Anyway**.
+- **Linux (x64):** the `.deb` (Debian, Ubuntu), the `.rpm` (Fedora, openSUSE) or the `.AppImage`. The `.deb` and `.rpm` install a udev rule that lets you open the headset without root. With the AppImage, install the rule yourself; see [Linux](#linux).
 
 ## Start
 
@@ -33,13 +34,13 @@ cargo tauri build               # also an NSIS installer under target\release\bu
 cargo run -p maxwell-peq -- --serve --offline   # debug build, editor in a browser
 ```
 
-On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+On Linux, install the WebKitGTK and udev headers first (Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libudev-dev`); `cargo tauri build` then builds a `.deb`, `.rpm` and `.AppImage`. On macOS the same commands build `Maxwell PEQ.app` and a `.dmg`; `--target universal-apple-darwin` builds both architectures in one (add both targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
 
 The workspace has two crates: `crates/maxwell-core` (filter compiler, APO conversion, profiles, HID protocol, session recovery; no UI) and `src-tauri` (the window, plus the `--serve` and `--worker device` entry points).
 
 ### Releases
 
-`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe and the universal macOS `.dmg`, and uploads them to a **draft** release, which you publish by hand after checking it:
+`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the workspace version in `Cargo.toml`. It runs the tests, then builds the Windows installer, the standalone exe, the universal macOS `.dmg` and the Linux `.deb`, `.rpm` and `.AppImage`, and uploads them to a **draft** release, which you publish by hand after checking it:
 
 ```powershell
 # bump version in Cargo.toml, commit, then:
@@ -47,7 +48,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows and macOS for every pull request and every push to `main`.
+`.github/workflows/ci.yml` runs formatting, Clippy and the tests on Windows, macOS and Linux for every pull request and every push to `main`.
 
 ### Python reference implementation
 
@@ -118,11 +119,24 @@ The same dialog switches between the ten onboard presets. The headset loads the 
 
 These commands were decoded from Audeze HQ 1.2.48 and have not been tested on a headset yet. Factory reset and the audio driver reinstall are left out on purpose.
 
-## macOS and other systems
+## macOS and Linux
 
 The macOS build reaches the headset through [hidapi](https://github.com/ruabmbua/hidapi-rs) and reads report sizes from the HID report descriptor (`crates/maxwell-core/src/descriptor.rs`). It does everything the Windows build does. The Audeze DLL only exists on Windows, so the Mac always uses the built-in encoder. The Audeze app check looks for processes named `Audeze`, `Audeze HQ` and `AudezeHQ`. On 2026-10-12, on an M1 Pro Mac over USB-C, it read and backed up the headset, applied built-in-encoder peaks and stacked high- and low-pass filters that were clearly audible, restored the backup, and changed balance and put it back. It then switched to the PlayStation dongle, read the headset again, and saved a flat profile to headset storage, which read back exactly. The app window opens and shows the same state.
 
-Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` on Linux. Linux builds compile (hidapi needs `libudev-dev`) but aren't packaged.
+Profiles live in `~/Library/Application Support/MaxwellPEQ` on macOS and `$XDG_DATA_HOME/maxwell-peq` (usually `~/.local/share/maxwell-peq`) on Linux.
+
+### Linux
+
+Linux uses the same hidapi backend, through `/dev/hidraw`. Those nodes belong to root, so the app needs the udev rule in [`src-tauri/linux/70-maxwell-peq.rules`](src-tauri/linux/70-maxwell-peq.rules), which gives the logged-in user access to the Maxwell's control interface over USB-C and the dongle. The `.deb` and `.rpm` install it to `/usr/lib/udev/rules.d` and reload udev. For the AppImage or a source build:
+
+```sh
+sudo cp src-tauri/linux/70-maxwell-peq.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+Then unplug and replug the headset or dongle. Without the rule, the app says it has no permission to open the headset.
+
+On 2026-10-12 the Linux build was tested in WSL2 (Ubuntu 26.04, kernel 6.18) with the dongle passed through by [usbipd-win](https://github.com/dorssel/usbipd-win). It read Custom 4 back byte for byte (the same SHA-256 as the Windows readback), read the balance, and applied a live EQ, which the headset acknowledged with the same reply it gives on Windows. The first read after attaching failed once with a packet-boundary error and the next three passed. Restore, saving to the headset, USB-C and the desktop window have not been tested on Linux, and nothing has been tested on a native Linux machine.
 
 ## Supported values and limits
 
