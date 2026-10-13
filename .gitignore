@@ -4,3 +4,10 @@ artifacts/
 backups/
 *.log
 .venv/
+.impeccable/
+profiles.json
+app.lock
+build/
+dist/
+target/
+src-tauri/gen/

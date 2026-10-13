@@ -1,4 +1,4 @@
-"""Loopback editor. Device writes require --enable-live and explicit actions."""
+"""Loopback editor. Device controls are on unless --offline; writes need explicit actions."""
 from __future__ import annotations
 import argparse
 import copy
@@ -12,10 +12,70 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
+import uuid
 
+import apo
 import peq
 
 ROOT = Path(__file__).resolve().parent
+AUDEZE_PROCESSES = ('Audeze.exe', 'Audeze HQ.exe', 'AudezeHQ.exe')
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
+
+def data_root():
+    """Profiles and backups: MAXWELL_PEQ_DATA, else the checkout."""
+    override = os.environ.get('MAXWELL_PEQ_DATA')
+    return Path(override) if override else ROOT
+
+
+def running_audeze():
+    """Names of running Audeze apps, or None where the check is unsupported."""
+    if os.name != 'nt':
+        return None
+    try:
+        output = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True, text=True,
+                                timeout=5, creationflags=NO_WINDOW).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    names = {line.split('","', 1)[0].strip('"').lower() for line in output.splitlines()}
+    return [name for name in AUDEZE_PROCESSES if name.lower() in names]
+
+
+def close_audeze():
+    """Ask Audeze apps to exit, then force any that remain (tray processes ignore WM_CLOSE)."""
+    running = running_audeze()
+    if not running:
+        return running
+    for force in (False, True):
+        for name in running:
+            subprocess.run(['taskkill', '/IM', name, '/T'] + (['/F'] if force else []), capture_output=True,
+                           timeout=10, creationflags=NO_WINDOW)
+        deadline = time.monotonic() + 3
+        while running and time.monotonic() < deadline:
+            time.sleep(0.25)
+            running = running_audeze()
+        if not running:
+            break
+    return running
+
+
+class AudezeWatch:
+    """tasklist takes ~50 ms; status polling shares one recent answer."""
+    def __init__(self, check=running_audeze, ttl=1.5):
+        self.check, self.ttl = check, ttl
+        self.lock = threading.Lock()
+        self.value, self.when = None, -ttl
+
+    def running(self, fresh=False):
+        with self.lock:
+            if fresh or time.monotonic() - self.when > self.ttl:
+                self.value, self.when = self.check(), time.monotonic()
+            return self.value
+
+    def reset(self):
+        with self.lock:
+            self.when = -self.ttl
 
 
 class WorkerError(ValueError):
@@ -24,11 +84,15 @@ class WorkerError(ValueError):
         self.result = result
 
 
+def worker_command(script):
+    return [sys.executable, str(ROOT / script)]
+
+
 def worker(script, request, timeout=15):
     try:
-        process = subprocess.run([sys.executable, str(ROOT / script)], input=json.dumps(request),
+        process = subprocess.run(worker_command(script), input=json.dumps(request),
                                  encoding='utf-8', capture_output=True, timeout=timeout, cwd=ROOT,
-                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                                 creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired as error:
         raise RuntimeError('Worker timed out; device acceptance is unconfirmed. Use Restore saved preset after a Save, or Restore live EQ after a temporary Apply.') from error
     try:
@@ -40,9 +104,113 @@ def worker(script, request, timeout=15):
     return result
 
 
+class Profiles:
+    """Named presets in one JSON file. Contents are editor drafts, so only the shape is checked."""
+    FIELDS = ('type', 'frequency', 'gain', 'q', 'enabled')
+
+    def __init__(self, path):
+        self.path = Path(path) if path is not None else None
+        self.lock = threading.Lock()
+        self.data = dict(version=1, active=None, profiles=[])
+        if self.path and self.path.exists():
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+            if not isinstance(data, dict) or not isinstance(data.get('profiles'), list):
+                raise ValueError(f'Invalid profile library: {self.path}')
+            self.data = dict(version=1, active=data.get('active'),
+                             profiles=[p for p in data['profiles'] if self._valid(p)])
+        if not self.data['profiles']:
+            flat = dict(filters=[dict(type='peak', frequency=1000, gain=0, q=1, enabled=True)], preamp='auto')
+            self.data['profiles'].append(dict(id=uuid.uuid4().hex, name='Flat', preset=flat))
+        if self.find(self.data['active']) is None:
+            self.data['active'] = self.data['profiles'][0]['id']
+
+    @classmethod
+    def _valid(cls, profile):
+        try:
+            cls.check_preset(profile['preset'])
+            cls.check_name(profile['name'])
+            return isinstance(profile['id'], str)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def check_name(name):
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60:
+            raise ValueError('Profile names need 1 to 60 characters.')
+        return name.strip()
+
+    @classmethod
+    def check_preset(cls, preset):
+        if not isinstance(preset, dict) or not isinstance(preset.get('filters'), list) or not 1 <= len(preset['filters']) <= 10:
+            raise ValueError('A profile needs 1 to 10 filters.')
+        filters = []
+        for row in preset['filters']:
+            if not isinstance(row, dict) or row.get('type') not in peq.FILTER_TYPES:
+                raise ValueError('Invalid filter in profile.')
+            for key in ('frequency', 'gain', 'q'):
+                if row.get(key) is not None and (isinstance(row[key], bool) or not isinstance(row[key], (int, float))):
+                    raise ValueError('Filter values must be numbers.')
+            filters.append({key: row.get(key) for key in cls.FIELDS} | dict(enabled=row.get('enabled') is not False))
+        preamp = preset.get('preamp', 'auto')
+        if preamp != 'auto' and (isinstance(preamp, bool) or not isinstance(preamp, (int, float))):
+            raise ValueError('Preamp must be auto or a number.')
+        return dict(filters=filters, preamp=preamp)
+
+    def find(self, profile_id):
+        return next((p for p in self.data['profiles'] if p['id'] == profile_id), None)
+
+    def listing(self):
+        with self.lock:
+            return copy.deepcopy(self.data)
+
+    def perform(self, path, request):
+        with self.lock:
+            profiles = self.data['profiles']
+            if path == '/api/profiles/save':
+                profile = self.find(request.get('id')) if request.get('id') else None
+                name = self.check_name(request.get('name')) if 'name' in request or profile is None else profile['name']
+                preset = self.check_preset(request.get('preset')) if 'preset' in request or profile is None else profile['preset']
+                if profile is None:
+                    if len(profiles) >= 50:
+                        raise ValueError('The library holds 50 profiles. Delete one first.')
+                    profile = dict(id=uuid.uuid4().hex)
+                    profiles.append(profile)
+                profile.update(name=name, preset=preset)
+                if request.get('activate'):
+                    self.data['active'] = profile['id']
+                saved = profile['id']
+            elif path == '/api/profiles/delete':
+                if len(profiles) == 1:
+                    raise ValueError('Keep at least one profile.')
+                profile = self.find(request.get('id'))
+                if profile is None:
+                    raise ValueError('That profile no longer exists.')
+                index = profiles.index(profile)
+                profiles.remove(profile)
+                if self.data['active'] == profile['id']:
+                    self.data['active'] = profiles[min(index, len(profiles) - 1)]['id']
+                saved = None
+            elif path == '/api/profiles/activate':
+                if self.find(request.get('id')) is None:
+                    raise ValueError('That profile no longer exists.')
+                self.data['active'] = saved = request['id']
+            elif path == '/api/profiles/order':
+                ids = request.get('ids')
+                if not isinstance(ids, list) or sorted(ids) != sorted(p['id'] for p in profiles):
+                    raise ValueError('The profile order does not match the library.')
+                self.data['profiles'] = [self.find(i) for i in ids]
+                saved = None
+            else:
+                raise ValueError('Unknown endpoint.')
+            if self.path:
+                App._atomic_json(self.path, self.data)
+            return dict(copy.deepcopy(self.data), saved=saved)
+
+
 class App:
-    def __init__(self, enable_live=False, session_path=None):
+    def __init__(self, enable_live=False, session_path=None, audeze=None):
         self.enable_live = enable_live
+        self.audeze = audeze or AudezeWatch()
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
         self.backup = None
@@ -54,6 +222,7 @@ class App:
         self.backup_path = None
         self.pending = None
         self.last_profile = None
+        self.saved_profile = None
         self.session_recovered = False
         self.session_path = Path(session_path) if session_path is not None else None
         if self.session_path and self.session_path.exists():
@@ -76,7 +245,7 @@ class App:
         return dict(version=1, backup=self.backup, backup_path=self.backup_path,
                     expected=self.expected, transport=self.transport, device=self.device,
                     live_state=self.live_state, storage_state=self.storage_state, pending=self.pending,
-                    last_profile=self.last_profile)
+                    last_profile=self.last_profile, saved_profile=self.saved_profile)
 
     def _persist(self):
         if self.session_path:
@@ -124,22 +293,25 @@ class App:
             dll_available, dll_error = True, None
         except Exception as error:
             dll_available, dll_error = False, str(error)
+        audeze = self.audeze.running() or []
         return dict(token=self.token, dll_available=dll_available, dll_error=dll_error,
                     live_enabled=self.enable_live, device=self.device,
                     backup_exists=self.backup is not None, live_state=self.live_state,
                     storage_state=self.storage_state, transport=self.transport,
                     transports=['usb', 'dongle'], session_recovered=self.session_recovered,
                     pending_operation=self.pending.get('operation') if self.pending else None,
-                    last_profile=self.last_profile,
+                    last_profile=self.last_profile, saved_profile=self.saved_profile,
+                    audeze_running=bool(audeze), audeze_apps=audeze,
+                    data_dir=str(self.session_path.parent.parent) if self.session_path else None,
                     backup_path=self.backup_path, hardware_audio_verified=False)
 
     def perform(self, path, request):
-        if path == '/api/compile':
-            return worker('peq.py', request)
         if path not in ('/api/read_device', '/api/apply', '/api/restore', '/api/save', '/api/restore_saved'):
             raise ValueError('Unknown endpoint.')
         if not self.enable_live:
-            raise ValueError('Device controls are disabled. Restart with --enable-live for a deliberate headset test.')
+            raise ValueError('Device controls are off because the app was started with --offline.')
+        if self.audeze.running(fresh=True):
+            raise ValueError('Audeze App/HQ is open. Custom PEQ will not work while it is open; close it first. No EQ was sent.')
         if path == '/api/read_device':
             if self.live_state != 'unchanged' or self.storage_state != 'unchanged':
                 raise ValueError('Restore the existing backup before reading a new one.')
@@ -228,6 +400,7 @@ class App:
                 self.storage_state = ('unchanged' if restoring else 'saved') if self.expected.get('saved_coefficients_hex') == blob_hex else 'uncertain'
                 if not restoring:
                     self.last_profile = copy.deepcopy(request)
+                self.saved_profile = copy.deepcopy(request) if self.storage_state == 'saved' else None
                 error = WorkerError(dict(details, error=str(error) + ' Saved coefficients were read back; live EQ is unconfirmed. The original backup is intact.'))
             elif persistent and details.get('persistent_write_started') is False:
                 self.storage_state = previous[1]
@@ -239,6 +412,7 @@ class App:
         if persistent:
             self.expected = copy.deepcopy(result['state'])
             self.storage_state = 'unchanged' if restoring else 'saved'
+            self.saved_profile = None if restoring else copy.deepcopy(request)
         if not restoring:
             self.last_profile = copy.deepcopy(request)
         self.live_state = 'unchanged' if restoring else 'applied'
@@ -255,6 +429,9 @@ class App:
 
 
 class Handler(BaseHTTPRequestHandler):
+    FILES = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
+             '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/graph.js': ('graph.js', 'text/javascript; charset=utf-8')}
+
     def log_message(self, format, *args):
         # No query strings, filter data, device identifiers, or tokens in logs.
         pass
@@ -279,14 +456,34 @@ class Handler(BaseHTTPRequestHandler):
         if not self.valid_host():
             return self.json(403, {'error': 'Use the 127.0.0.1 address printed by the server.'})
         if self.path == '/api/status':
+            self.server.app.audeze.running()  # refresh the cached tasklist answer before taking the device lock
             with self.server.app.lock:
                 return self.json(200, self.server.app.status())
-        files = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
-                 '/app.js': ('app.js', 'text/javascript; charset=utf-8')}
-        if self.path not in files:
+        if self.path == '/api/profiles':
+            return self.json(200, self.server.profiles.listing())
+        if self.path not in self.FILES:
             return self.json(404, {'error': 'Not found.'})
-        filename, mime = files[self.path]
+        filename, mime = self.FILES[self.path]
         self.send(200, (ROOT / 'web' / filename).read_bytes(), mime)
+
+    def handle_local(self, request):
+        """Requests that never touch the headset; they must not wait for the device lock."""
+        if self.path == '/api/compile':
+            return worker('peq.py', request)
+        if self.path.startswith('/api/profiles/'):
+            return self.server.profiles.perform(self.path, request)
+        if self.path == '/api/apo/parse':
+            return apo.parse(request.get('text'))
+        if self.path == '/api/apo/export':
+            preset = Profiles.check_preset(request.get('preset'))
+            return dict(text=apo.export(preset, request.get('preamp_db')))
+        if self.path == '/api/close_audeze':
+            still = close_audeze()
+            self.server.app.audeze.reset()
+            if still:
+                raise ValueError(f'{", ".join(still)} is still running. Quit it from the tray icon.')
+            return dict(audeze_running=bool(self.server.app.audeze.running(fresh=True)))
+        return None
 
     def do_POST(self):
         origin = self.headers.get('Origin')
@@ -295,11 +492,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(403, {'error': 'Invalid local session. Reload the editor.'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 1 <= size <= 65536 or self.headers.get_content_type() != 'application/json':
-                raise ValueError('Expected a JSON request of at most 64 KB.')
+            if not 1 <= size <= 262144 or self.headers.get_content_type() != 'application/json':
+                raise ValueError('Expected a JSON request of at most 256 KB.')
             request = json.loads(self.rfile.read(size))
             if not isinstance(request, dict):
                 raise ValueError('Expected a JSON object.')
+            result = self.handle_local(request)
+            if result is not None:
+                return self.json(200, result)
             if not self.server.app.lock.acquire(blocking=False):
                 return self.json(409, {'error': 'Another operation is running; wait for it to finish.'})
             try:
@@ -311,14 +511,23 @@ class Handler(BaseHTTPRequestHandler):
             self.json(400, {'error': str(error)})
 
 
+def make_server(enable_live=True, port=0, data=None):
+    data = Path(data) if data is not None else data_root()
+    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server.daemon_threads = True
+    server.app = App(enable_live, data / 'backups' / 'session.json')
+    server.profiles = Profiles(data / 'profiles.json')
+    return server
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8769)
-    parser.add_argument('--enable-live', action='store_true')
+    parser.add_argument('--offline', action='store_true', help='edit and preview only; never open the headset')
+    parser.add_argument('--enable-live', action='store_true', help=argparse.SUPPRESS)  # default since the redesign
     args = parser.parse_args()
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
-    server.app = App(args.enable_live, ROOT / 'backups' / 'session.json')
-    print(f'Editor: http://127.0.0.1:{server.server_port} | Device controls: {args.enable_live}', flush=True)
+    server = make_server(not args.offline, args.port)
+    print(f'Editor: http://127.0.0.1:{server.server_port} | Device controls: {not args.offline}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

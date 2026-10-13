@@ -1,0 +1,367 @@
+[
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": -3,
+     "q": 0
+    }
+   ],
+   "preamp": "auto"
+  },
+  "error": "Q must be between 0.1 and 20."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 24000,
+     "gain": -3,
+     "q": 1
+    }
+   ],
+   "preamp": "auto"
+  },
+  "error": "Frequency must be between 20 and 20000."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 13,
+     "q": 1
+    }
+   ],
+   "preamp": "auto"
+  },
+  "error": "Gain must be between -12 and 12."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 6,
+     "q": 1
+    }
+   ],
+   "preamp": 0
+  },
+  "error": "Use Auto preamp or -6 dB or lower for these boosts."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": -3,
+     "q": true
+    }
+   ],
+   "preamp": "auto"
+  },
+  "error": "Q must be a number."
+ },
+ {
+  "request": {
+   "filters": []
+  },
+  "error": "Use between 1 and 10 filters."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    },
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1
+    }
+   ]
+  },
+  "error": "Use between 1 and 10 filters."
+ },
+ {
+  "request": {
+   "filters": [
+    "x"
+   ]
+  },
+  "error": "Filter 1 must be an object."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "type": "notch",
+     "frequency": 1000,
+     "gain": 0,
+     "q": 0.7071067811865476
+    }
+   ]
+  },
+  "error": "Unsupported filter type: notch."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 0,
+     "q": 1,
+     "enabled": "yes"
+    }
+   ]
+  },
+  "error": "Enabled must be true or false."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "type": "low_pass",
+     "frequency": 1000,
+     "gain": 3,
+     "q": 0.7071067811865476
+    }
+   ]
+  },
+  "error": "Pass filters do not use gain; set gain to 0."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "type": "high_shelf",
+     "frequency": 1000,
+     "gain": 3,
+     "q": 4
+    }
+   ]
+  },
+  "error": "Shelf filters use fixed slope S=1 (Q=0.70710678)."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": -3,
+     "q": 1
+    }
+   ],
+   "preamp": "loud"
+  },
+  "error": "Preamp must be a number."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": -3,
+     "q": 1
+    }
+   ],
+   "preamp": -61
+  },
+  "error": "Preamp must be between -60 and 0."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 6.02,
+     "q": 1
+    }
+   ],
+   "preamp": -6
+  },
+  "error": "Use Auto preamp or -6.02 dB or lower for these boosts."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 12,
+     "q": 1
+    },
+    {
+     "frequency": 1001,
+     "gain": 12,
+     "q": 1
+    },
+    {
+     "frequency": 1002,
+     "gain": 12,
+     "q": 1
+    },
+    {
+     "frequency": 1003,
+     "gain": 12,
+     "q": 1
+    },
+    {
+     "frequency": 1004,
+     "gain": 12,
+     "q": 1
+    },
+    {
+     "frequency": 1005,
+     "gain": 12,
+     "q": 1
+    }
+   ]
+  },
+  "error": "This filter set needs more than 60 dB of headroom; reduce the boosts."
+ },
+ {
+  "request": [
+   1,
+   2
+  ],
+  "error": "A preset must be a JSON object."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "gain": 0,
+     "q": 1
+    }
+   ]
+  },
+  "error": "Frequency must be a number."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "q": 1
+    }
+   ]
+  },
+  "error": "Gain must be a number."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 1,
+     "q": null
+    }
+   ]
+  },
+  "error": "Q must be a number."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": 0.5,
+     "q": 1
+    }
+   ],
+   "preamp": -0.4
+  },
+  "error": "Use Auto preamp or -0.5 dB or lower for these boosts."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 1000,
+     "gain": -3,
+     "q": 1
+    }
+   ],
+   "preamp": 0.5
+  },
+  "error": "Preamp must be between -60 and 0."
+ },
+ {
+  "request": "text",
+  "error": "A preset must be a JSON object."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "type": "high_pass",
+     "frequency": 1000,
+     "gain": 0,
+     "q": 0.05
+    }
+   ]
+  },
+  "error": "Q must be between 0.1 and 20."
+ },
+ {
+  "request": {
+   "filters": [
+    {
+     "frequency": 19.9,
+     "gain": 0,
+     "q": 1
+    }
+   ]
+  },
+  "error": "Frequency must be between 20 and 20000."
+ }
+]

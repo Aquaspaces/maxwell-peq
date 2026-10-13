@@ -79,7 +79,7 @@ def execute(request):
         return result
 
 
-if __name__ == '__main__':
+def main():
     try:
         json.dump(execute(json.load(sys.stdin)), sys.stdout)
     except Exception as error:
@@ -91,3 +91,7 @@ if __name__ == '__main__':
                    'saved_verified': SAVED_VERIFIED, 'state': LAST_STATE,
                    'state_changed': isinstance(error, StateChanged)}, sys.stdout)
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
