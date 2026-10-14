@@ -76,7 +76,7 @@ const flatPreset = () => ({filters: [{type: 'peak', frequency: 1000, gain: 0, q:
 function normalizeFilter(f) {
   const type = TYPES[f.type] ? f.type : 'peak';
   return {type, frequency: f.frequency ?? null, gain: isPass(type) ? 0 : f.gain ?? null,
-    q: isShelf(type) ? SHELF_Q : f.q ?? null, enabled: f.enabled !== false};
+    q: f.q ?? (isShelf(type) ? SHELF_Q : null), enabled: f.enabled !== false};
 }
 const payload = (preset = state.preset) => ({filters: preset.filters.map(normalizeFilter), preamp: preset.preamp ?? 'auto'});
 const r6 = v => typeof v === 'number' ? round(v, 6) : v;
@@ -94,7 +94,7 @@ function problems(preset = state.preset) {
   preset.filters.forEach((f, i) => {
     if (!inRange(f.frequency, 20, 20000)) list.push({index: i, field: 'frequency', text: `Filter ${i + 1}: frequency must be 20 to 20,000 Hz.`});
     if (!isPass(f.type) && !inRange(f.gain, -12, 12)) list.push({index: i, field: 'gain', text: `Filter ${i + 1}: gain must be −12 to +12 dB.`});
-    if (!isShelf(f.type) && !inRange(f.q, 0.1, 20)) list.push({index: i, field: 'q', text: `Filter ${i + 1}: Q must be 0.1 to 20.`});
+    if (!inRange(f.q, 0.1, 20)) list.push({index: i, field: 'q', text: `Filter ${i + 1}: Q must be 0.1 to 20.`});
   });
   if (preset.preamp !== 'auto' && !inRange(preset.preamp, -60, 0)) list.push({index: -1, field: 'preamp', text: 'Manual preamp must be −60 to 0 dB.'});
   return list;
@@ -294,8 +294,9 @@ function renderRows() {
       const values = {type: next};
       if (isPass(next)) values.gain = 0;
       else if (isPass(current.type)) values.gain = 0;
-      if (isShelf(next)) values.q = SHELF_Q;
-      else if (isShelf(current.type)) values.q = isPass(next) ? SHELF_Q : 1;
+      // Moving between shelves keeps Q; entering or leaving them resets it to each type's default.
+      if (isShelf(next) && !isShelf(current.type)) values.q = SHELF_Q;
+      else if (isShelf(current.type) && !isShelf(next)) values.q = isPass(next) ? SHELF_Q : 1;
       setFilter(index, values);
       changed({rows: true}); commit();
       $('filter-rows').children[index]?.querySelector('select').focus();
@@ -304,7 +305,7 @@ function renderRows() {
 
     row.append(on, number, typeCell, numberCell(index, 'frequency', 'Hz', {min: 20, max: 20000, stepValue: 1}));
     row.append(isPass(f.type) ? fixedCell('—', 'Pass filters have no gain.') : numberCell(index, 'gain', 'dB', {min: -12, max: 12, stepValue: 0.1}));
-    row.append(isShelf(f.type) ? fixedCell('S = 1', 'Shelf slope is fixed, so Q does not apply.') : numberCell(index, 'q', '', {min: 0.1, max: 20, stepValue: 0.01}));
+    row.append(numberCell(index, 'q', '', {min: 0.1, max: 20, stepValue: 0.01}));
 
     const removeCell = document.createElement('td'); removeCell.className = 'col-remove';
     const remove = document.createElement('button');
@@ -913,7 +914,7 @@ function renderEditorState() {
   if (text) note.textContent = text;
   else if (adjusted) note.textContent = adjusted;
   else if (state.preset.filters.some(f => f.enabled && f.type !== 'peak'))
-    note.textContent = 'Shelf and pass filters are experimental. Shelves use a fixed slope (S = 1), so Q does not apply.';
+    note.textContent = 'Shelf and pass filters are experimental. Shelf Q 0.71 gives the standard slope (S = 1); higher Q adds a bump and dip around the shelf frequency.';
   else if (status().encoder === 'built-in')
     note.textContent = status().dll_available
       ? 'Using the built-in encoder (MAXWELL_PEQ_ENCODER=built-in). It has not been compared with the Audeze library by ear yet.'
@@ -1091,7 +1092,7 @@ function renderImport(result) {
     const row = document.createElement('tr');
     if (f.enabled === false) row.className = 'off';
     for (const text of [i + 1, TYPES[f.type] + (f.enabled === false ? ' (off)' : ''), fmtHz(f.frequency),
-      isPass(f.type) ? '—' : fmtDb(f.gain), isShelf(f.type) ? 'S = 1' : fixed(f.q, 2, 3)]) {
+      isPass(f.type) ? '—' : fmtDb(f.gain), fixed(f.q, 2, 3)]) {
       const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
     }
     body.append(row);
@@ -1126,6 +1127,299 @@ async function confirmImport(event) {
     toast(error.message, 'error');
     $('import-confirm').disabled = false;
   }
+}
+
+/* ---------- keyboard shortcuts (desktop app only) ---------- */
+// Global keys that switch the headset's EQ. While a field records, the app
+// releases its shortcuts so their keys reach the page.
+const shortcutState = {actions: [], recording: null};
+const MODIFIER_CODES = /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/;
+
+const keysText = keys => (keys || '').replace(/\bSuper\b/g, 'Win');
+
+// KeyA -> A, Digit1 -> 1, Numpad1 -> Num1, ArrowUp -> Up; others keep their code name.
+function keyName(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  if (code.startsWith('Numpad')) return `Num${code.slice(6)}`;
+  if (code.startsWith('Arrow')) return code.slice(5);
+  const named = ['Backquote', 'Backslash', 'BracketLeft', 'BracketRight', 'Comma', 'Equal', 'Minus', 'Period', 'Quote',
+    'Semicolon', 'Slash', 'Space', 'Enter', 'Tab', 'Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete', 'Pause',
+    'MediaPlayPause', 'MediaTrackNext', 'MediaTrackPrevious'];
+  return named.includes(code) ? code : null;
+}
+
+function modifiers(event) {
+  return [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Super'].filter(Boolean);
+}
+
+function renderShortcuts() {
+  $('shortcut-list').replaceChildren(...shortcutState.actions.map(action => {
+    const item = document.createElement('li');
+    item.className = 'shortcut';
+    const name = document.createElement('span');
+    name.className = 'shortcut-name';
+    name.id = `shortcut-${action.id}`;
+    name.textContent = action.label;
+    const field = document.createElement('button');
+    field.type = 'button';
+    field.className = 'shortcut-keys';
+    field.dataset.action = action.id;
+    field.setAttribute('aria-labelledby', name.id);
+    const recording = shortcutState.recording === action.id;
+    field.classList.toggle('recording', recording);
+    field.classList.toggle('empty', !action.keys && !recording);
+    field.textContent = recording ? 'Press keys…' : keysText(action.keys) || 'None';
+    field.addEventListener('click', () => record(action.id));
+    field.addEventListener('keydown', captureKeys);
+    field.addEventListener('blur', () => { if (shortcutState.recording === action.id) stopRecording(); });
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'icon-button';
+    clear.title = `Remove the ${action.label} shortcut`;
+    clear.setAttribute('aria-label', clear.title);
+    clear.disabled = !action.keys;
+    clear.innerHTML = '<svg><use href="#i-close"/></svg>';
+    clear.addEventListener('click', () => saveShortcut(action.id, ''));
+    item.append(name, field, clear);
+    if (action.problem) {
+      const problem = document.createElement('p');
+      problem.className = 'shortcut-problem';
+      problem.textContent = action.problem;
+      item.append(problem);
+    }
+    return item;
+  }));
+}
+
+function focusShortcut(id) {
+  document.querySelector(`.shortcut-keys[data-action="${id}"]`)?.focus();
+}
+
+async function record(id) {
+  shortcutState.recording = id;
+  renderShortcuts();
+  focusShortcut(id);
+  try { await tauri.core.invoke('shortcuts_pause', {paused: true}); } catch {}
+}
+
+async function stopRecording() {
+  if (!shortcutState.recording) return;
+  shortcutState.recording = null;
+  renderShortcuts();
+  try { await tauri.core.invoke('shortcuts_pause', {paused: false}); } catch {}
+}
+
+function captureKeys(event) {
+  const id = shortcutState.recording;
+  if (!id || event.target.dataset.action !== id) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const mods = modifiers(event);
+  if (!mods.length && event.key === 'Escape') { stopRecording().then(() => focusShortcut(id)); return; }
+  if (!mods.length && (event.key === 'Backspace' || event.key === 'Delete')) { saveShortcut(id, ''); return; }
+  if (MODIFIER_CODES.test(event.code)) {
+    event.target.textContent = `${keysText(mods.join('+'))}+…`;
+    return;
+  }
+  const key = keyName(event.code);
+  if (!key) { event.target.textContent = 'That key can’t be used'; return; }
+  saveShortcut(id, [...mods, key].join('+'));
+}
+
+async function saveShortcut(id, keys) {
+  shortcutState.recording = null;
+  try {
+    shortcutState.actions = (await tauri.core.invoke('shortcuts_set', {shortcuts: {[id]: keys}})).actions;
+  } catch (error) { toast(String(error), 'error'); }
+  renderShortcuts();
+  focusShortcut(id);
+}
+
+async function openShortcuts() {
+  if (!tauri) return;
+  try { shortcutState.actions = (await tauri.core.invoke('shortcuts_get')).actions; }
+  catch (error) { toast(String(error), 'error'); return; }
+  shortcutState.recording = null;
+  renderShortcuts();
+  if (!$('shortcuts-dialog').open) $('shortcuts-dialog').showModal();
+}
+
+async function resetShortcuts() {
+  const defaults = Object.fromEntries(shortcutState.actions.map(action => [action.id, action.default]));
+  try { shortcutState.actions = (await tauri.core.invoke('shortcuts_set', {shortcuts: defaults})).actions; }
+  catch (error) { toast(String(error), 'error'); }
+  renderShortcuts();
+}
+
+/* ---------- settings and updates (desktop app only) ---------- */
+const settingsState = {values: {}, updates: null, checking: false};
+
+function renderSettings() {
+  const values = settingsState.values;
+  for (const input of document.querySelectorAll('#settings-dialog [data-setting]')) {
+    input.checked = Boolean(values[input.dataset.setting]);
+    // Closing and minimizing to the tray need the tray icon.
+    const needsTray = ['close_to_tray', 'minimize_to_tray'].includes(input.dataset.setting);
+    input.disabled = needsTray && !values.tray_icon;
+    input.closest('.setting').classList.toggle('disabled', input.disabled);
+  }
+  $('settings-version').textContent = values.version ? `Maxwell PEQ ${values.version}` : '';
+}
+
+function checkedWhen(seconds) {
+  const date = new Date(seconds * 1000);
+  const time = date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  return date.toDateString() === new Date().toDateString() ? `today at ${time}` : date.toLocaleDateString();
+}
+
+function renderUpdates() {
+  const result = settingsState.updates;
+  const status = $('update-status');
+  status.classList.toggle('error', Boolean(result?.error) && !settingsState.checking);
+  $('update-check').disabled = settingsState.checking;
+  $('update-download').hidden = !result?.update_available;
+  $('update-dot').hidden = !result?.update_available;
+  if (result?.update_available) $('update-download').textContent = `Download ${result.latest}`;
+  if (settingsState.checking) status.textContent = 'Checking…';
+  else if (!result) status.textContent = settingsState.values.check_updates ? 'Not checked yet.' : 'Update checks are off.';
+  else if (result.error) status.textContent = result.error;
+  else if (result.update_available) status.textContent = `Maxwell PEQ ${result.latest} is out. You have ${result.current}.`;
+  else status.textContent = `You have the latest version. Checked ${checkedWhen(result.checked_at)}.`;
+  renderReleaseNotes(result?.releases || []);
+}
+
+function renderReleaseNotes(releases) {
+  const list = $('release-notes');
+  if (!releases.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = settingsState.updates?.error || !settingsState.updates
+      ? 'Check for updates to see the notes for recent releases.' : 'No releases yet.';
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...releases.slice(0, 5).map((release, index) => {
+    const details = document.createElement('details');
+    details.className = 'release';
+    details.open = index === 0;
+    const summary = document.createElement('summary');
+    summary.innerHTML = '<svg aria-hidden="true"><use href="#i-chevron"/></svg>';
+    summary.append(release.version);
+    if (release.newer) {
+      const badge = document.createElement('span');
+      badge.className = 'release-new';
+      badge.textContent = 'New';
+      summary.append(badge);
+    }
+    if (release.date) {
+      const date = document.createElement('span');
+      date.className = 'release-date';
+      date.textContent = new Date(`${release.date}T12:00:00`).toLocaleDateString([], {year: 'numeric', month: 'short', day: 'numeric'});
+      summary.append(date);
+    }
+    const body = document.createElement('div');
+    body.className = 'release-body';
+    body.append(...releaseNotes(release.notes));
+    details.append(summary, body);
+    return details;
+  }));
+}
+
+// Release notes are GitHub markdown. Only headings, lists, paragraphs, bold,
+// code and link text are kept, built as DOM nodes so nothing in them runs.
+// The install instructions under "Downloads" are left out.
+function releaseNotes(markdown) {
+  const lines = (markdown || '').replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/);
+  const nodes = [];
+  let list = null, paragraph = null, skipping = 0;
+  const end = () => { list = null; paragraph = null; };
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    if (heading && skipping && heading[1].length > skipping) continue;
+    if (heading) {
+      skipping = /^downloads?$/i.test(heading[2]) ? heading[1].length : 0;
+      end();
+      if (!skipping && !/^what.s new$/i.test(heading[2])) nodes.push(inline('h4', heading[2]));
+      continue;
+    }
+    if (skipping) continue;
+    const item = /^\s*[-*+]\s+(.*)$/.exec(line);
+    if (item) {
+      paragraph = null;
+      if (!list) { list = document.createElement('ul'); nodes.push(list); }
+      list.append(inline('li', item[1]));
+    } else if (!line.trim()) {
+      end();
+    } else if (list && /^\s{2,}/.test(line)) {
+      list.lastChild.append(' ', ...inline('span', line.trim()).childNodes);
+    } else if (paragraph) {
+      paragraph.append(' ', ...inline('span', line.trim()).childNodes);
+    } else {
+      list = null;
+      paragraph = inline('p', line.trim());
+      nodes.push(paragraph);
+    }
+  }
+  if (!nodes.length) {
+    const none = document.createElement('p');
+    none.textContent = 'No patch notes for this release.';
+    nodes.push(none);
+  }
+  return nodes;
+}
+
+function inline(tag, text) {
+  const element = document.createElement(tag);
+  for (const part of text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]*\))/)) {
+    if (!part) continue;
+    let node;
+    if (/^\*\*.+\*\*$/.test(part)) { node = document.createElement('strong'); node.textContent = part.slice(2, -2); }
+    else if (/^`.+`$/.test(part)) { node = document.createElement('code'); node.textContent = part.slice(1, -1); }
+    else if (/^\[.+\]\(.*\)$/.test(part)) node = document.createTextNode(part.slice(1, part.indexOf('](')));
+    else node = document.createTextNode(part);
+    element.append(node);
+  }
+  return element;
+}
+
+async function openSettings() {
+  if (!tauri) return;
+  try {
+    settingsState.values = await tauri.core.invoke('settings_get');
+    settingsState.updates = await tauri.core.invoke('updates_get', {now: false});
+  } catch (error) { toast(String(error), 'error'); return; }
+  renderSettings();
+  renderUpdates();
+  if (!$('settings-dialog').open) $('settings-dialog').showModal();
+}
+
+async function changeSetting(input) {
+  try {
+    settingsState.values = await tauri.core.invoke('settings_set', {changes: {[input.dataset.setting]: input.checked}});
+  } catch (error) { toast(String(error), 'error'); }
+  renderSettings();
+  renderUpdates();
+}
+
+async function checkForUpdates() {
+  settingsState.checking = true;
+  renderUpdates();
+  try { settingsState.updates = await tauri.core.invoke('updates_get', {now: true}); }
+  catch (error) { settingsState.updates = {error: String(error)}; }
+  settingsState.checking = false;
+  renderUpdates();
+}
+
+async function downloadUpdate() {
+  try { await tauri.core.invoke('open_release', {url: settingsState.updates.url}); }
+  catch (error) { toast(String(error), 'error'); }
+}
+
+function openDialog(name) {
+  if (name === 'settings') openSettings();
+  else if (name === 'shortcuts') openShortcuts();
 }
 
 /* ---------- wiring ---------- */
@@ -1301,6 +1595,23 @@ function wire() {
   $('export-apo').addEventListener('click', () => exportApo());
 
   $('open-import').addEventListener('click', () => openImport());
+  if (tauri) {
+    $('open-shortcuts').hidden = false;
+    $('open-shortcuts').addEventListener('click', openShortcuts);
+    $('shortcuts-reset').addEventListener('click', resetShortcuts);
+    $('shortcuts-dialog').addEventListener('close', stopRecording);
+    $('open-settings').hidden = false;
+    $('open-settings').addEventListener('click', openSettings);
+    for (const input of document.querySelectorAll('#settings-dialog [data-setting]')) {
+      input.addEventListener('change', () => changeSetting(input));
+    }
+    $('settings-shortcuts').addEventListener('click', () => { $('settings-dialog').close(); openShortcuts(); });
+    $('update-check').addEventListener('click', checkForUpdates);
+    $('update-download').addEventListener('click', downloadUpdate);
+    tauri.event.listen('open-dialog', event => openDialog(event.payload));
+    tauri.event.listen('updates-changed', event => { settingsState.updates = event.payload; renderUpdates(); });
+    tauri.core.invoke('updates_get', {now: false}).then(result => { settingsState.updates = result; renderUpdates(); }, () => {});
+  }
   $('import-text').addEventListener('input', () => { $('import-file-name').textContent = ''; parseImport(); });
   $('import-name').addEventListener('input', () => { importState.nameEdited = true; });
   $('import-choose').addEventListener('click', () => $('import-file').click());
@@ -1397,6 +1708,7 @@ async function start() {
     $('device-detail').textContent = error.message;
     return;
   }
+  if (tauri && location.hash) openDialog(location.hash.slice(1));
   pollStatus();
   pollTraffic();
   const s = status();

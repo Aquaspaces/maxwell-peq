@@ -1,6 +1,6 @@
 //! Preset validation and the four-rate coefficient compiler. No device I/O.
 
-use crate::dsp::{Filter, Kind, MAX_BANDS, RATES, SHELF_Q, decode_words, rbj_biquad, response};
+use crate::dsp::{Filter, Kind, MAX_BANDS, RATES, SHELF_Q, decode_words, rbj_biquad, response, shelf_turning_ratios};
 use crate::encoder::{encode_bank, substitute_bank};
 use crate::fmt::{g, py_str};
 use crate::json::{float, get, object};
@@ -27,10 +27,6 @@ pub fn number(value: Option<&Value>, name: &str, low: f64, high: f64) -> Result<
         return Err(Error::value(format!("{name} must be between {} and {}.", g(low), g(high))));
     }
     Ok(value)
-}
-
-fn is_close(a: f64, b: f64, abs_tol: f64) -> bool {
-    a == b || (a - b).abs() <= (1e-9 * a.abs().max(b.abs())).max(abs_tol)
 }
 
 /// Check a preset request; returns the filters and the effective preamp in dB.
@@ -68,11 +64,8 @@ pub fn validate(request: &Value) -> Result<(Vec<Filter>, f64)> {
         if kind.is_pass() && gain != 0.0 {
             return Err(Error::value("Pass filters do not use gain; set gain to 0."));
         }
-        if kind.is_shelf() && !is_close(q, SHELF_Q, 1e-5) {
-            return Err(Error::value("Shelf filters use fixed slope S=1 (Q=0.70710678)."));
-        }
         let frequency = number(get(row, "frequency"), "Frequency", 20.0, 20000.0)?;
-        filters.push(Filter { kind, frequency, gain, q: if kind.is_shelf() { SHELF_Q } else { q }, enabled });
+        filters.push(Filter { kind, frequency, gain, q, enabled });
     }
     let headroom = headroom_db(&filters);
     let auto = if headroom > 0.0 { -headroom } else { 0.0 };
@@ -94,7 +87,7 @@ pub fn validate(request: &Value) -> Result<(Vec<Filter>, f64)> {
 ///
 /// Boosts at different frequencies don't stack, so this is the curve's real peak,
 /// not the sum of every boost. It is sampled on the compiler's probe grid, which
-/// includes each filter's centre and each resonant pass filter's peak.
+/// includes each filter's centre and each resonant pass filter's or shelf's peak.
 fn headroom_db(filters: &[Filter]) -> f64 {
     let mut peak: f64 = 0.0;
     for (_, rate) in RATES {
@@ -119,7 +112,7 @@ pub fn filter_json(f: &Filter) -> Value {
 }
 
 /// Dense log grid plus centre and near-centre probes, to catch narrow-filter errors,
-/// plus each resonant pass filter's peak and, with `endpoints`, DC and Nyquist.
+/// plus each resonant pass filter's and shelf's peaks and, with `endpoints`, DC and Nyquist.
 fn probes(filters: &[Filter], rate: f64, endpoints: bool) -> Vec<f64> {
     let mut frequencies: Vec<f64> = (0..768).map(|i| 20.0 * 1000f64.powf(f64::from(i) / 767.0)).collect();
     for f in filters {
@@ -132,6 +125,13 @@ fn probes(filters: &[Filter], rate: f64, endpoints: bool) -> Vec<f64> {
             let ratio = (1.0 - 1.0 / (2.0 * f.q.powf(2.0))).sqrt();
             let ratio = if f.kind == Kind::LowPass { ratio } else { 1.0 / ratio };
             frequencies.push(rate / PI * ((PI * f.frequency / rate).tan() * ratio).atan());
+        }
+        if f.enabled
+            && let Some(ratios) = shelf_turning_ratios(f)
+        {
+            for ratio in ratios {
+                frequencies.push(rate / PI * ((PI * f.frequency / rate).tan() * ratio).atan());
+            }
         }
     }
     if endpoints {
@@ -261,7 +261,7 @@ fn nearest_bank(filters: &[Filter], preamp: f64, rate: f64, vendor: Option<&Vend
             let candidates =
                 [("frequency", f.frequency, frequency, Filter { frequency, ..f }), ("q", f.q, q, Filter { q, ..f })];
             for (field, (name, from, to, candidate)) in candidates.into_iter().enumerate() {
-                if to == from || to == tried[index][field] || (name == "q" && f.kind.is_shelf()) {
+                if to == from || to == tried[index][field] {
                     continue;
                 }
                 tried[index][field] = to;

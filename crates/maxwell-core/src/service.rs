@@ -1,7 +1,9 @@
 //! The editor's API, shared by the desktop window and the `--serve` dev server.
 //!
 //! Requests that never touch the headset run immediately; device requests take
-//! the device lock and are refused while another one is running.
+//! the device lock and are refused while another one is running. Shortcut
+//! keys, the tray and scripts wait for the lock instead, and the tray's
+//! battery poll never makes anyone wait more than one short read.
 
 use crate::app::App;
 use crate::audeze::{self, AudezeWatch};
@@ -12,6 +14,7 @@ use crate::worker::Runner;
 use crate::{Result, apo};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 
 /// A refused request: an HTTP-style status and the message for the page.
@@ -41,6 +44,9 @@ pub struct Service {
     pub data_dir: Option<PathBuf>,
     /// The raw reports device workers exchange with the headset.
     pub traffic: Arc<Traffic>,
+    /// Set while the tray's poll holds the device lock, so page requests wait
+    /// for it instead of being refused.
+    background: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -65,6 +71,7 @@ impl Service {
             audeze,
             data_dir,
             traffic,
+            background: AtomicBool::new(false),
         })
     }
 
@@ -111,6 +118,51 @@ impl Service {
 
     /// One POST endpoint. `request` must already be a JSON object.
     pub fn post(&self, path: &str, request: &Value) -> Result<Value, Failure> {
+        self.post_with(path, request, false)
+    }
+
+    /// Like [`Service::post`], but a device request waits for the one running
+    /// instead of being refused.
+    pub fn post_wait(&self, path: &str, request: &Value) -> Result<Value, Failure> {
+        self.post_with(path, request, true)
+    }
+
+    /// A device request that gives way to everything else: `None` when another
+    /// one is running. Requests that arrive meanwhile wait for it to finish.
+    pub fn post_background(&self, path: &str, request: &Value) -> Option<Result<Value, Failure>> {
+        self.background.store(true, Ordering::SeqCst);
+        let mut app = match self.app.try_lock() {
+            Ok(app) => app,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                self.background.store(false, Ordering::SeqCst);
+                return None;
+            }
+        };
+        let result = app.perform(path, request).map_err(Failure::from);
+        self.background.store(false, Ordering::SeqCst);
+        drop(app);
+        Some(result)
+    }
+
+    /// A command from a script, a shortcut key or the tray:
+    /// `{"command": "preset", "value": 1..4 | "next" | "previous"}`, or
+    /// `{"command": "status"}`, which reads the headset and returns [`summary`].
+    pub fn command(&self, request: &Value) -> Result<Value, Failure> {
+        match get(request, "command").and_then(Value::as_str) {
+            Some("preset") => {
+                self.post_wait("/api/switch", &object([("preset", get_or_null(request, "value").clone())]))
+            }
+            Some("status") => {
+                // A failed read is part of the answer.
+                let _ = self.post_wait("/api/glance", &json!({}));
+                Ok(summary(&self.status()))
+            }
+            _ => Err(Failure { status: 400, message: "Unknown command.".into() }),
+        }
+    }
+
+    fn post_with(&self, path: &str, request: &Value, wait: bool) -> Result<Value, Failure> {
         if !request.is_object() {
             return Err(Failure { status: 400, message: "Expected a JSON object.".into() });
         }
@@ -120,6 +172,7 @@ impl Service {
         let mut app = match self.app.try_lock() {
             Ok(app) => app,
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) if wait || self.background.load(Ordering::SeqCst) => lock(&self.app),
             Err(TryLockError::WouldBlock) => {
                 return Err(Failure {
                     status: 409,
@@ -129,4 +182,29 @@ impl Service {
         };
         app.perform(path, request).map_err(Failure::from)
     }
+}
+
+/// What the tray and `MaxwellPEQ --status` show, from [`Service::status`]:
+/// battery, mic mute, the active preset and the profile saved there.
+pub fn summary(status: &Value) -> Value {
+    let glance = get_or_null(status, "glance");
+    let index = get_or_null(status, "index").as_u64();
+    let slot = index.and_then(|index| index.checked_sub(7)).filter(|slot| *slot < 4);
+    let profile = slot.map_or(Value::Null, |slot| get_or_null(&status["slots"][slot as usize], "name").clone());
+    let preset_name = index
+        .and_then(|index| crate::controls::PRESETS.get(usize::try_from(index).ok()?.checked_sub(1)?))
+        .map_or(Value::Null, |name| json!(name));
+    object([
+        ("offline", json!(!status["live_enabled"].as_bool().unwrap_or(false))),
+        ("audeze_running", json!(status["audeze_running"].as_bool().unwrap_or(false))),
+        ("device", if status["device_read"] == json!(true) { status["device"].clone() } else { Value::Null }),
+        ("battery", get_or_null(glance, "battery").clone()),
+        ("mic_muted", get_or_null(glance, "mic_muted").clone()),
+        ("preset", index.map_or(Value::Null, |index| json!(index))),
+        ("preset_name", preset_name),
+        ("slot", slot.map_or(Value::Null, |slot| json!(slot + 1))),
+        ("profile", profile),
+        ("profiles", Value::Array((0..4).map(|slot| get_or_null(&status["slots"][slot], "name").clone()).collect())),
+        ("error", get_or_null(glance, "error").clone()),
+    ])
 }

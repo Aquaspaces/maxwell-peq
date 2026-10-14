@@ -18,6 +18,8 @@
     <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="9" rx="1.5"/><path d="M13 7V5.5C13 4.7 12.3 4 11.5 4h-6C4.7 4 4 4.7 4 5.5v6c0 .8.7 1.5 1.5 1.5H7"/></symbol>
     <symbol id="i-more" viewBox="0 0 20 20"><circle cx="5" cy="10" r=".9"/><circle cx="10" cy="10" r=".9"/><circle cx="15" cy="10" r=".9"/></symbol>
     <symbol id="i-close" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9m0-9-9 9"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 20 20"><rect x="2.5" y="5" width="15" height="10" rx="1.5"/><path d="M5.5 8h1m2.5 0h1m2.5 0h1M5.5 10.5h1m7 0h1M7.5 12.5h5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M8.6 2.8h2.8l.4 2 1.5.9 1.9-.7 1.4 2.4-1.5 1.3v1.7l1.5 1.3-1.4 2.4-1.9-.7-1.5.9-.4 2H8.6l-.4-2-1.5-.9-1.9.7-1.4-2.4 1.5-1.3V9.6L3.4 8.3l1.4-2.4 1.9.7 1.5-.9z"/></symbol>
     <symbol id="i-undo" viewBox="0 0 20 20"><path d="M7.5 5 4 8.5 7.5 12M4.5 8.5h7a4 4 0 0 1 0 8H9"/></symbol>
     <symbol id="i-redo" viewBox="0 0 20 20"><path d="M12.5 5 16 8.5 12.5 12m3-3.5h-7a4 4 0 0 0 0 8H11"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></symbol>
@@ -55,6 +57,8 @@
         </div>
       </section>
       <button type="button" class="sidebar-import" id="open-import"><svg><use href="#i-import"/></svg>Import Equalizer APO preset</button>
+      <button type="button" class="sidebar-link" id="open-shortcuts" hidden><svg><use href="#i-keyboard"/></svg>Keyboard shortcuts</button>
+      <button type="button" class="sidebar-link" id="open-settings" hidden><svg><use href="#i-settings"/></svg>Settings<span class="update-dot" id="update-dot" title="An update is available" hidden></span></button>
     </aside>
 
     <main class="main">
@@ -308,6 +312,75 @@
           <button type="button" class="button ghost" id="headset-read">Read headset</button>
         </div>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="shortcuts-dialog" class="dialog shortcuts" aria-labelledby="shortcuts-title">
+    <form method="dialog">
+      <header class="dialog-header">
+        <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+        <button type="button" class="icon-button" data-close aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      </header>
+      <div class="shortcuts-body">
+        <p class="muted">These keys switch the headset's EQ from any app, including full-screen games, while Maxwell PEQ is in the tray. Click a shortcut, then press the new keys.</p>
+        <ul class="shortcut-list" id="shortcut-list"></ul>
+      </div>
+      <footer class="dialog-footer">
+        <button type="button" class="button ghost" id="shortcuts-reset">Restore defaults</button>
+        <button type="submit" class="button primary" value="done">Done</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="dialog settings" aria-labelledby="settings-title">
+    <form method="dialog">
+      <header class="dialog-header">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-button" data-close aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      </header>
+      <div class="settings-body">
+      <section class="settings-section" aria-labelledby="settings-app-title">
+        <h3 id="settings-app-title">Startup and tray</h3>
+        <div class="setting">
+          <div class="setting-text"><span id="set-start_at_login-label">Start when you sign in</span><span class="setting-note" id="set-start_at_login-note">Starts in the tray, without opening this window.</span></div>
+          <label class="switch"><input type="checkbox" data-setting="start_at_login" aria-labelledby="set-start_at_login-label" aria-describedby="set-start_at_login-note"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><span id="set-tray_icon-label">Show the tray icon</span><span class="setting-note" id="set-tray_icon-note">Battery, mic and EQ at a glance. Right-click it for the menu.</span></div>
+          <label class="switch"><input type="checkbox" data-setting="tray_icon" aria-labelledby="set-tray_icon-label" aria-describedby="set-tray_icon-note"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><span id="set-close_to_tray-label">Keep running when this window closes</span><span class="setting-note" id="set-close_to_tray-note">Shortcut keys keep working. Quit from the tray menu.</span></div>
+          <label class="switch"><input type="checkbox" data-setting="close_to_tray" aria-labelledby="set-close_to_tray-label" aria-describedby="set-close_to_tray-note"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><span id="set-minimize_to_tray-label">Minimize to the tray</span><span class="setting-note" id="set-minimize_to_tray-note">Hides this window instead of leaving it on the taskbar.</span></div>
+          <label class="switch"><input type="checkbox" data-setting="minimize_to_tray" aria-labelledby="set-minimize_to_tray-label" aria-describedby="set-minimize_to_tray-note"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><span>Keyboard shortcuts</span><span class="setting-note">Keys that switch EQ from any app.</span></div>
+          <button type="button" class="button ghost" id="settings-shortcuts">Change…</button>
+        </div>
+      </section>
+      <section class="settings-section" aria-labelledby="settings-updates-title">
+        <h3 id="settings-updates-title">Updates</h3>
+        <div class="setting">
+          <div class="setting-text"><span id="set-check_updates-label">Check for updates</span><span class="setting-note" id="set-check_updates-note">Asks GitHub for new releases once a day. Sends only the app version.</span></div>
+          <label class="switch"><input type="checkbox" data-setting="check_updates" aria-labelledby="set-check_updates-label" aria-describedby="set-check_updates-note"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="update-row">
+          <p class="update-status" id="update-status" role="status" aria-live="polite"></p>
+          <button type="button" class="button ghost" id="update-check">Check now</button>
+          <button type="button" class="button primary" id="update-download" hidden></button>
+        </div>
+        <h3 id="release-notes-title">What's new</h3>
+        <div class="release-notes" id="release-notes" aria-labelledby="release-notes-title"></div>
+      </section>
+      </div>
+      <footer class="dialog-footer">
+        <span class="settings-version" id="settings-version"></span>
+        <button type="submit" class="button primary" value="done">Done</button>
+      </footer>
     </form>
   </dialog>
 

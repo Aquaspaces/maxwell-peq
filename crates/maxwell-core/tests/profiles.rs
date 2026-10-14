@@ -21,11 +21,34 @@ fn parse(text: &str) -> maxwell_core::Result<Value> {
 }
 
 #[test]
+fn shelf_q_and_slope_round_trip() {
+    let text = "Filter 1: ON LSC Fc 105 Hz Gain 5 dB Q 1.5
+Filter 2: ON HSC Fc 8000 Hz Gain -3 dB Q 0.7071
+                Filter 3: ON HSC 6 dB Fc 4000 Hz Gain 2 dB
+Filter 4: ON LSC 72 dB Fc 100 Hz Gain 12 dB
+";
+    let result = parse(text).unwrap();
+    let qs: Vec<_> = result["filters"].as_array().unwrap().iter().map(|f| f["q"].as_f64().unwrap()).collect();
+    // 6 dB/octave is S = 0.5: 1/Q = sqrt((A + 1/A)(1/S - 1) + 2) with A = 10^(2/40).
+    assert_eq!(qs, [1.5, SHELF_Q, 0.499, SHELF_Q]);
+    assert_eq!(result["warnings"], json!(["Line 4: shelf slope 72 dB can't be used with its gain; using Q 0.707."]));
+    let exported = apo::export(&result, &json!(-5)).unwrap();
+    assert!(
+        exported.contains(
+            "Filter 1: ON LSC Fc 105 Hz Gain 5 dB Q 1.5
+"
+        ),
+        "{exported}"
+    );
+    assert_eq!(parse(&exported).unwrap()["filters"], result["filters"]);
+}
+
+#[test]
 fn parses_supported_filters_and_reports_the_rest() {
     let result = parse(SAMPLE).unwrap();
     let kinds: Vec<_> = result["filters"].as_array().unwrap().iter().map(|f| f["type"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["low_shelf", "peak", "peak", "high_pass"]);
-    assert_eq!(result["filters"][0]["q"], SHELF_Q);
+    assert_eq!(result["filters"][0]["q"], 0.7);
     assert_eq!(result["filters"][2]["enabled"], false);
     assert_eq!(result["filters"][3]["gain"].as_f64(), Some(0.0));
     assert_eq!(result["preamp"], "auto");

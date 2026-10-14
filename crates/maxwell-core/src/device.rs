@@ -79,9 +79,20 @@ fn stored_slots(device: &mut dyn Device, state: &Value) -> Result<Value> {
     Ok(Value::Array(slots))
 }
 
+/// The custom preset `step` (1 or -1) away from the active one, wrapping
+/// around. From a built-in preset, next is EQ 1 and previous is EQ 4.
+fn stepped(state: &Value, step: i64) -> u8 {
+    match custom_slot(state) {
+        Some(slot) => 7 + (i64::from(slot) + step).rem_euclid(4) as u8,
+        None if step > 0 => 7,
+        None => 10,
+    }
+}
+
 /// `read`: the state and what all four custom presets hold. `save`: store a
 /// profile in custom preset `slot` (0..3), and play it if that preset is
-/// active. `select`: make preset `index` (7..10) active.
+/// active. `select`: make preset `index` (7..10) active, or with `step` the
+/// next (1) or previous (-1) custom preset.
 pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Result<Value> {
     *progress = Progress::default();
     let operation = match get(request, "operation").and_then(Value::as_str) {
@@ -91,6 +102,7 @@ pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Res
     let mut blob = Vec::new();
     let mut slot = 0;
     let mut index = 0;
+    let mut step = 0;
     match operation {
         "save" => {
             blob = get(request, "blob_hex")
@@ -103,12 +115,21 @@ pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Res
                 .filter(|slot| *slot < 4)
                 .ok_or_else(|| Error::value("Choose custom preset 1, 2, 3 or 4."))? as u8;
         }
-        "select" => {
-            index = get(request, "index")
-                .and_then(Value::as_u64)
-                .filter(|index| (7..=10).contains(index))
-                .ok_or_else(|| Error::value("Only custom presets 1 to 4 can be selected."))? as u8;
-        }
+        "select" => match get(request, "step") {
+            Some(value) => {
+                step = value
+                    .as_i64()
+                    .filter(|step| step.abs() == 1)
+                    .ok_or_else(|| Error::value("Step one preset forward or back."))?;
+            }
+            None => {
+                index = get(request, "index")
+                    .and_then(Value::as_u64)
+                    .filter(|index| (7..=10).contains(index))
+                    .ok_or_else(|| Error::value("Only custom presets 1 to 4 can be selected."))?
+                    as u8;
+            }
+        },
         _ => {}
     }
     let access = Access { live: operation == "save", persistent: operation == "save", select: operation == "select" };
@@ -144,6 +165,9 @@ pub fn execute(request: &Value, open: &mut Open, progress: &mut Progress) -> Res
             result.insert("sha256".into(), json!(hex::encode(Sha256::digest(&blob))));
         }
         _ => {
+            if step != 0 {
+                index = stepped(&state, step);
+            }
             let selected = state["index"].as_u64() != Some(u64::from(index));
             if selected {
                 progress.write_started = true;
