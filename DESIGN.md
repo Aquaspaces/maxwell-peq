@@ -42,3 +42,19 @@ Segoe UI Variable (system UI fallbacks), 13–14px body, tabular numerals for ev
 ## Motion
 
 Short fades and 4–6px slides for toasts and menus (≤160ms). `prefers-reduced-motion` removes them.
+
+## Tray panel
+
+The tray panel is the one surface styled after Windows 11 rather than the editor, so it sits beside the system's own quick settings and volume panels.
+
+- Follows the Windows light or dark mode and the Windows accent colour, read from the registry each time it opens. Acrylic background, rounded corners, Segoe UI Variable.
+- A 270-degree arc gauge for the battery with the percentage in the centre; it turns red at 15% or below.
+- Bottom left: a round mic indicator, filled with the accent when the mic is muted. Bottom right: the active EQ as an accent pill that opens the EQ list.
+- Opens above the tray with a 12px margin and hides when it loses focus or on Esc.
+- The tray icon is the same glance in miniature, drawn at four times its size and averaged down: a 240-degree battery gauge with the number inside, in the taskbar's text colour (red at 15% or below); a mic at bottom left, red with a slash when muted; and a green pill at bottom right with the EQ number. Drawn in `src-tauri/src/glance.rs`; `MAXWELL_PEQ_ICON_PREVIEW=<folder> cargo test -p maxwell-peq glance` writes PNGs of it.
+
+## Settings
+
+- Laid out like a Windows Settings page: each row has a title, a one-line note under it, and the switch on the right. Rows that depend on the tray icon dim while it is off.
+- Update status is one line with **Check now**, and a primary **Download x.y.z** button only when there is a newer release.
+- Release notes are collapsible cards, newest open, with a **New** tag on releases newer than this build. They show headings, lists, bold, code and link text from the markdown, built as DOM nodes; nothing in them can run or navigate the window.

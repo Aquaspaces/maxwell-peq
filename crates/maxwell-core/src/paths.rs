@@ -35,3 +35,13 @@ pub fn logs_path(data: &std::path::Path) -> PathBuf {
 pub fn links_path(data: &std::path::Path) -> PathBuf {
     data.join("links.json")
 }
+
+/// App settings, such as the shortcut keys.
+pub fn settings_path(data: &std::path::Path) -> PathBuf {
+    data.join("settings.json")
+}
+
+/// How to reach the running app, for `MaxwellPEQ --preset`.
+pub fn remote_path(data: &std::path::Path) -> PathBuf {
+    data.join("remote.json")
+}

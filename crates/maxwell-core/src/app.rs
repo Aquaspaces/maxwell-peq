@@ -15,10 +15,12 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const DEVICE_ENDPOINTS: [&str; 9] = [
+pub const DEVICE_ENDPOINTS: [&str; 11] = [
     "/api/read_device",
     "/api/save",
     "/api/select",
+    "/api/switch",
+    "/api/glance",
     "/api/balance/read",
     "/api/balance/apply",
     "/api/balance/source",
@@ -50,6 +52,9 @@ pub struct App {
     pub data_dir: Option<PathBuf>,
     /// The last controls read in this run; control writes need one first.
     pub controls: Value,
+    /// The last tray reading: `{preset, mic_muted, battery, transport}`, or
+    /// `{error}` when the headset couldn't be read.
+    pub glance: Value,
     runner: Runner,
 }
 
@@ -106,6 +111,7 @@ impl App {
             links: load_links(data_dir.as_ref()),
             balance: Value::Null,
             controls: Value::Null,
+            glance: Value::Null,
             data_dir,
             runner,
         }
@@ -179,6 +185,7 @@ impl App {
             ("hardware_audio_verified", json!(false)),
             ("balance", self.balance.clone()),
             ("controls", self.controls.clone()),
+            ("glance", self.glance.clone()),
         ])
     }
 
@@ -407,14 +414,21 @@ impl App {
         Ok(object([("state", state), ("custom", json!(custom)), ("message", json!(message))]))
     }
 
-    /// Make custom preset `index` (7..10) active.
+    /// Make custom preset `index` (7..10) active, or with `step` (1 or -1)
+    /// the next or previous one, counted from what the headset plays now.
     fn select(&mut self, request: &Value) -> Result<Value> {
         let transport = Self::request_transport(request, &self.transport)?;
-        let index = get(request, "index")
-            .and_then(Value::as_u64)
-            .filter(|index| (FIRST_CUSTOM..FIRST_CUSTOM + 4).contains(index))
-            .ok_or_else(|| Error::value("Choose Preset 1, 2, 3 or 4."))?;
-        let device_request = json!({"operation": "select", "index": index, "transport": transport});
+        let mut device_request = json!({"operation": "select", "transport": transport});
+        match get(request, "step") {
+            Some(step) => device_request["step"] = step.clone(),
+            None => {
+                device_request["index"] = get(request, "index")
+                    .and_then(Value::as_u64)
+                    .filter(|index| (FIRST_CUSTOM..FIRST_CUSTOM + 4).contains(index))
+                    .map(|index| json!(index))
+                    .ok_or_else(|| Error::value("Choose Preset 1, 2, 3 or 4."))?;
+            }
+        }
         let mut result = self.run(Worker::Device, &device_request)?;
         let state = get_or_null(&result, "state").clone();
         if state.is_object() {
@@ -423,8 +437,68 @@ impl App {
         if !result.is_object() {
             result = json!({});
         }
-        result["message"] = json!(format!("{} is now active.", preset_name(&json!(index))));
+        let index = get_or_null(&state, "index").clone();
+        let profile = index
+            .as_u64()
+            .and_then(|index| index.checked_sub(FIRST_CUSTOM))
+            .and_then(|slot| self.links.get(slot as usize))
+            .and_then(|link| link.get("name"))
+            .and_then(Value::as_str);
+        let preset = preset_name(if index.is_null() { get_or_null(&device_request, "index") } else { &index });
+        result["message"] = json!(match profile {
+            Some(name) => format!("{preset} ({name}) is now active."),
+            None => format!("{preset} is now active."),
+        });
         Ok(result)
+    }
+
+    /// `preset`: 1 to 4, `next` or `previous`. For scripts and shortcut keys.
+    fn switch(&mut self, request: &Value) -> Result<Value> {
+        let target = get_or_null(request, "preset");
+        let text = target.as_str().map(str::to_owned).unwrap_or_else(|| py_str(target));
+        let mut select = json!({});
+        if let Some(transport) = get(request, "transport") {
+            select["transport"] = transport.clone();
+        }
+        match text.trim().to_ascii_lowercase().as_str() {
+            "next" => select["step"] = json!(1),
+            "previous" | "prev" => select["step"] = json!(-1),
+            number => match number.parse::<u64>() {
+                Ok(slot @ 1..=4) => select["index"] = json!(FIRST_CUSTOM + slot - 1),
+                _ => return Err(Error::value("Choose preset 1, 2, 3, 4, next or previous.")),
+            },
+        }
+        self.select(&select)
+    }
+
+    /// Battery, mic mute and the active preset, for the tray. Read-only.
+    fn glance(&mut self, request: &Value) -> Result<Value> {
+        let transport = Self::request_transport(request, &self.transport)?;
+        let outcome = self.run(Worker::Device, &json!({"operation": "glance", "transport": transport}));
+        let result = match outcome {
+            Ok(result) => result,
+            Err(error) => {
+                self.glance = object([("error", json!(error.to_string()))]);
+                return Err(error);
+            }
+        };
+        let index = get_or_null(&result["preset"], "index").clone();
+        if index.is_u64() && index != self.index {
+            // Switched on the headset itself. Keep the device line in step.
+            let state = object([("device", object([("model_label", json!(self.model_label()))])), ("index", index)]);
+            let connection = get(&result, "transport").and_then(Value::as_str).unwrap_or(&transport).to_owned();
+            self.index = state["index"].clone();
+            self.device = device_line(&connection, &state);
+            self.connection = json!(connection);
+        }
+        self.glance = result.clone();
+        Ok(result)
+    }
+
+    /// "Original Maxwell PS", from the last device line.
+    fn model_label(&self) -> String {
+        let line = self.device.as_str().unwrap_or_default();
+        line.split(" · ").next().filter(|_| line.contains(" · ")).unwrap_or("Original Maxwell PS").to_owned()
     }
 
     /// Save a profile into custom preset `slot` (0..3). The request carries
@@ -501,6 +575,8 @@ impl App {
         match path {
             "/api/read_device" => self.read_device(request),
             "/api/select" => self.select(request),
+            "/api/switch" => self.switch(request),
+            "/api/glance" => self.glance(request),
             "/api/save" => self.save(request),
             "/api/preset/select" => self.select_preset(request),
             _ if path.starts_with("/api/controls/") => self.controls(path, request),

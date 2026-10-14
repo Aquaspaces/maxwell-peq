@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Maxwell PEQ",
         "width": 1240,
         "height": 860,

@@ -1,3 +1,7 @@
+## What's new
+
+<!-- Replace this with the changes before publishing. Maxwell PEQ shows this section as the release's patch notes. -->
+
 ## Downloads
 
 **Windows 10/11**

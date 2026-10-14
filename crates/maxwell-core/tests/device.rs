@@ -330,3 +330,28 @@ mod automatic_connection {
         assert!(requested(&json!({"transport": "bluetooth"})).is_err());
     }
 }
+
+#[test]
+fn select_steps_through_the_custom_presets_and_wraps() {
+    let f = Fixture::new();
+    for (from, step, to) in [(10, 1, 7), (7, -1, 10), (8, 1, 9), (9, -1, 8)] {
+        let request = json!({"operation": "select", "step": step});
+        let (result, _, log) = f.run(request, vec![f.on(from), f.on(to)], |_| {});
+        assert_eq!(result.unwrap()["state"]["index"], json!(to));
+        assert_eq!(log.borrow().selects, vec![to as u8], "{from} {step}");
+    }
+    // From a built-in preset, next is EQ 1 and previous is EQ 4.
+    for (step, to) in [(1, 7u64), (-1, 10)] {
+        let mut built_in = f.state.clone();
+        built_in["index"] = json!(2);
+        built_in["slot"] = Value::Null;
+        let (result, _, log) = f.run(json!({"operation": "select", "step": step}), vec![built_in, f.on(to)], |_| {});
+        assert!(result.is_ok());
+        assert_eq!(log.borrow().selects, vec![to as u8]);
+    }
+    for step in [json!(0), json!(2), json!("next")] {
+        let (result, _, log) = f.run(json!({"operation": "select", "step": step}), vec![], |_| {});
+        assert!(result.is_err(), "{step}");
+        assert!(log.borrow().opened.is_empty());
+    }
+}

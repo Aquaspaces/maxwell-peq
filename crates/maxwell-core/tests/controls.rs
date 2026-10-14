@@ -545,3 +545,15 @@ fn offline_mode_blocks_controls() {
         assert!(app.perform(path, &json!({})).unwrap_err().to_string().contains("--offline"));
     }
 }
+
+#[test]
+fn a_glance_reads_the_preset_mic_and_battery_only() {
+    let (result, progress, log) = run_worker(json!({"operation": "glance", "transport": "usb"}), false);
+    let result = result.unwrap();
+    assert_eq!(log.borrow().opened, vec![(false, Transport::Usb)]);
+    assert!(log.borrow().writes.is_empty() && !progress.write_started);
+    assert_eq!(result["preset"], json!({"index": 7, "name": "EQ 1", "custom": true}));
+    assert_eq!(result["mic_muted"], json!(false));
+    assert_eq!(result["battery"], Value::Null);
+    assert_eq!(result["transport"], json!("usb"));
+}
