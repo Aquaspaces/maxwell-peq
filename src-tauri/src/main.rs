@@ -10,6 +10,7 @@
 
 use maxwell_core::audeze::AudezeWatch;
 use maxwell_core::service::Service;
+use maxwell_core::traffic::Traffic;
 use maxwell_core::{http, paths, remote, worker};
 use serde_json::{Value, json};
 use std::fs::{File, TryLockError};
@@ -303,7 +304,9 @@ fn start_service(offline: bool, data: &Path) -> Result<Service, String> {
     let exe =
         std::env::current_exe().map_err(|error| format!("Maxwell PEQ could not find its own executable: {error}"))?;
     // e.g. a damaged profiles file: keep the files and say where they are.
-    Service::new(!offline, Some(data.to_owned()), Arc::new(AudezeWatch::default()), worker::default_runner(exe))
+    let traffic = Arc::new(Traffic::default());
+    let runner = worker::default_runner(exe, traffic.clone());
+    Service::new(!offline, Some(data.to_owned()), Arc::new(AudezeWatch::default()), runner, traffic)
         .map_err(|error| format!("Maxwell PEQ could not start: {error}\n\nData folder: {}", data.display()))
 }
 

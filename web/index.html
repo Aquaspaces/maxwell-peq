@@ -43,6 +43,19 @@
       </div>
       <ul class="profile-list" id="profile-list" aria-labelledby="profiles-heading"></ul>
       <p class="slot-hint" id="slot-hint" hidden></p>
+      <section class="traffic" id="traffic" aria-labelledby="traffic-heading">
+        <div class="sidebar-heading traffic-heading">
+          <h2 id="traffic-heading">Sent to the headset</h2>
+          <div class="traffic-tools">
+            <label class="traffic-toggle" title="Also show what the headset sends back"><input type="checkbox" id="traffic-replies">Replies</label>
+            <button type="button" class="icon-button" id="traffic-copy" title="Copy log" aria-label="Copy log"><svg><use href="#i-copy"/></svg></button>
+            <button type="button" class="icon-button" id="traffic-clear" title="Clear log" aria-label="Clear log"><svg><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+        <div class="traffic-log" id="traffic-log" role="log" aria-live="off" tabindex="0">
+          <p class="traffic-empty" id="traffic-empty">Every HID report the app writes to the headset shows up here as it is sent.</p>
+        </div>
+      </section>
       <button type="button" class="sidebar-import" id="open-import"><svg><use href="#i-import"/></svg>Import Equalizer APO preset</button>
       <button type="button" class="sidebar-link" id="open-shortcuts" hidden><svg><use href="#i-keyboard"/></svg>Keyboard shortcuts</button>
       <button type="button" class="sidebar-link" id="open-settings" hidden><svg><use href="#i-settings"/></svg>Settings<span class="update-dot" id="update-dot" title="An update is available" hidden></span></button>

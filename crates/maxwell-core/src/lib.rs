@@ -25,6 +25,7 @@ pub mod protocol;
 pub mod remote;
 pub mod service;
 pub mod settings;
+pub mod traffic;
 pub mod updates;
 pub mod util;
 pub mod vendor;

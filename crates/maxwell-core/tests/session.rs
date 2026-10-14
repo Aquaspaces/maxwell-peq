@@ -386,7 +386,7 @@ mod switching {
     #[test]
     fn commands_switch_and_summarize() {
         let fake = Fake::default();
-        let service = Service::new(true, None, quiet(), fake.runner()).unwrap();
+        let service = Service::new(true, None, quiet(), fake.runner(), Default::default()).unwrap();
         fake.ok(json!({"state": state(7), "selected": true}));
         let result = service.command(&json!({"command": "preset", "value": "1"})).unwrap();
         assert_eq!(result["message"], "Preset 1 is now active.");
@@ -422,7 +422,7 @@ mod switching {
     #[test]
     fn a_background_read_gives_way_to_a_running_request() {
         let fake = Fake::default();
-        let service = Arc::new(Service::new(true, None, quiet(), fake.runner()).unwrap());
+        let service = Arc::new(Service::new(true, None, quiet(), fake.runner(), Default::default()).unwrap());
         let (started, release) = (Arc::new(std::sync::Barrier::new(2)), Arc::new(std::sync::Barrier::new(2)));
         let (s, r) = (started.clone(), release.clone());
         fake.reply(move |_, _| {

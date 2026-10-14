@@ -163,6 +163,34 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   margin: 0; padding: 0 8px 8px; list-style: none;
 }
 .slot-hint { padding: 2px 16px 0; color: var(--faint); font-size: 12px; }
+.traffic { flex: 1 1 0; min-height: 120px; display: flex; flex-direction: column; margin-top: 10px; border-top: 1px solid var(--line); }
+.traffic-heading { padding-right: 6px; }
+.traffic-tools { display: flex; align-items: center; gap: 2px; }
+.traffic-toggle { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.traffic-toggle input { width: 13px; height: 13px; }
+.traffic-tools .icon-button { width: 24px; height: 24px; }
+.traffic-tools .icon-button svg { width: 14px; height: 14px; }
+.traffic-log {
+  flex: 1; min-height: 0; overflow-y: auto; margin: 0 8px 8px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: #141517;
+  font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; line-height: 1.5;
+}
+.traffic-log:focus-visible { outline: none; border-color: var(--accent); }
+.traffic-empty { font-family: var(--font); font-size: 12px; color: var(--faint); }
+.traffic-op { display: flex; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-family: var(--font); font-size: 11.5px; font-weight: 600; }
+.traffic-op:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.traffic-op time { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.traffic-end { color: var(--faint); font-family: var(--font); font-size: 11.5px; }
+.traffic-end.failed { color: var(--danger); }
+.traffic-row { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 4px; padding: 2px 0; }
+.traffic-row .dir { color: var(--accent); }
+.traffic-row.in .dir { color: var(--ok); }
+.traffic-row.in .bytes { color: var(--muted); }
+.traffic-row .bytes { word-spacing: -1px; overflow-wrap: anywhere; color: var(--text); }
+.traffic-row .head { color: var(--faint); }
+.traffic-row .pad { color: #5d5f66; }
+.traffic-note { color: var(--warn); overflow-wrap: anywhere; }
+.traffic-log.hide-replies .traffic-row.in { display: none; }
 .sidebar-import {
   display: flex; align-items: center; gap: 8px; margin: auto 8px 8px; padding: 9px 10px;
   border: 1px dashed var(--line-strong); border-radius: var(--radius); background: transparent;
