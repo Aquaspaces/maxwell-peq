@@ -8,7 +8,7 @@
       "type": "low_shelf",
       "frequency": 105.0,
       "gain": 6.0,
-      "q": 0.7071067811865476,
+      "q": 0.7,
       "enabled": true
      },
      {
@@ -201,30 +201,28 @@
       "type": "low_shelf",
       "frequency": 100.0,
       "gain": 3.0,
-      "q": 0.7071067811865476,
+      "q": 0.71,
       "enabled": true
      },
      {
       "type": "high_shelf",
       "frequency": 8000.0,
       "gain": -2.0,
-      "q": 0.7071067811865476,
+      "q": 0.612,
       "enabled": true
      },
      {
       "type": "high_shelf",
       "frequency": 8000.0,
       "gain": -2.0,
-      "q": 0.7071067811865476,
+      "q": 2.0,
       "enabled": true
      }
     ],
     "preamp": "auto",
     "source_preamp": null,
     "warnings": [
-     "Line 1: skipped a LS 6 dB corner-frequency shelf; only center-frequency S=1 shelves are supported.",
-     "Line 3: shelf slope 9 dB changed to the headset's fixed S=1 slope.",
-     "Line 4: shelf Q 2 changed to 0.707; the headset uses a fixed S=1 slope."
+     "Line 1: skipped a LS 6 dB corner-frequency shelf; only center-frequency shelves are supported."
     ]
    }
   },
@@ -363,7 +361,7 @@
       "type": "high_shelf",
       "frequency": 5000,
       "gain": 2,
-      "q": 0.7071067811865476,
+      "q": 3,
       "enabled": false
      }
     ],

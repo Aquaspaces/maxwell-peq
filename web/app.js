@@ -76,7 +76,7 @@ const flatPreset = () => ({filters: [{type: 'peak', frequency: 1000, gain: 0, q:
 function normalizeFilter(f) {
   const type = TYPES[f.type] ? f.type : 'peak';
   return {type, frequency: f.frequency ?? null, gain: isPass(type) ? 0 : f.gain ?? null,
-    q: isShelf(type) ? SHELF_Q : f.q ?? null, enabled: f.enabled !== false};
+    q: f.q ?? (isShelf(type) ? SHELF_Q : null), enabled: f.enabled !== false};
 }
 const payload = (preset = state.preset) => ({filters: preset.filters.map(normalizeFilter), preamp: preset.preamp ?? 'auto'});
 const r6 = v => typeof v === 'number' ? round(v, 6) : v;
@@ -94,7 +94,7 @@ function problems(preset = state.preset) {
   preset.filters.forEach((f, i) => {
     if (!inRange(f.frequency, 20, 20000)) list.push({index: i, field: 'frequency', text: `Filter ${i + 1}: frequency must be 20 to 20,000 Hz.`});
     if (!isPass(f.type) && !inRange(f.gain, -12, 12)) list.push({index: i, field: 'gain', text: `Filter ${i + 1}: gain must be −12 to +12 dB.`});
-    if (!isShelf(f.type) && !inRange(f.q, 0.1, 20)) list.push({index: i, field: 'q', text: `Filter ${i + 1}: Q must be 0.1 to 20.`});
+    if (!inRange(f.q, 0.1, 20)) list.push({index: i, field: 'q', text: `Filter ${i + 1}: Q must be 0.1 to 20.`});
   });
   if (preset.preamp !== 'auto' && !inRange(preset.preamp, -60, 0)) list.push({index: -1, field: 'preamp', text: 'Manual preamp must be −60 to 0 dB.'});
   return list;
@@ -294,8 +294,9 @@ function renderRows() {
       const values = {type: next};
       if (isPass(next)) values.gain = 0;
       else if (isPass(current.type)) values.gain = 0;
-      if (isShelf(next)) values.q = SHELF_Q;
-      else if (isShelf(current.type)) values.q = isPass(next) ? SHELF_Q : 1;
+      // Moving between shelves keeps Q; entering or leaving them resets it to each type's default.
+      if (isShelf(next) && !isShelf(current.type)) values.q = SHELF_Q;
+      else if (isShelf(current.type) && !isShelf(next)) values.q = isPass(next) ? SHELF_Q : 1;
       setFilter(index, values);
       changed({rows: true}); commit();
       $('filter-rows').children[index]?.querySelector('select').focus();
@@ -304,7 +305,7 @@ function renderRows() {
 
     row.append(on, number, typeCell, numberCell(index, 'frequency', 'Hz', {min: 20, max: 20000, stepValue: 1}));
     row.append(isPass(f.type) ? fixedCell('—', 'Pass filters have no gain.') : numberCell(index, 'gain', 'dB', {min: -12, max: 12, stepValue: 0.1}));
-    row.append(isShelf(f.type) ? fixedCell('S = 1', 'Shelf slope is fixed, so Q does not apply.') : numberCell(index, 'q', '', {min: 0.1, max: 20, stepValue: 0.01}));
+    row.append(numberCell(index, 'q', '', {min: 0.1, max: 20, stepValue: 0.01}));
 
     const removeCell = document.createElement('td'); removeCell.className = 'col-remove';
     const remove = document.createElement('button');
@@ -913,7 +914,7 @@ function renderEditorState() {
   if (text) note.textContent = text;
   else if (adjusted) note.textContent = adjusted;
   else if (state.preset.filters.some(f => f.enabled && f.type !== 'peak'))
-    note.textContent = 'Shelf and pass filters are experimental. Shelves use a fixed slope (S = 1), so Q does not apply.';
+    note.textContent = 'Shelf and pass filters are experimental. Shelf Q 0.71 gives the standard slope (S = 1); higher Q adds a bump and dip around the shelf frequency.';
   else if (status().encoder === 'built-in')
     note.textContent = status().dll_available
       ? 'Using the built-in encoder (MAXWELL_PEQ_ENCODER=built-in). It has not been compared with the Audeze library by ear yet.'
@@ -1091,7 +1092,7 @@ function renderImport(result) {
     const row = document.createElement('tr');
     if (f.enabled === false) row.className = 'off';
     for (const text of [i + 1, TYPES[f.type] + (f.enabled === false ? ' (off)' : ''), fmtHz(f.frequency),
-      isPass(f.type) ? '—' : fmtDb(f.gain), isShelf(f.type) ? 'S = 1' : fixed(f.q, 2, 3)]) {
+      isPass(f.type) ? '—' : fmtDb(f.gain), fixed(f.q, 2, 3)]) {
       const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
     }
     body.append(row);

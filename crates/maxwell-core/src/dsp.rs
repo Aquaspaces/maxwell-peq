@@ -2,12 +2,13 @@
 //!
 //! Arithmetic follows CPython's evaluation order (left to right, Smith complex
 //! division, `hypot` for magnitude) so curves match the Python reference.
-//! Shelves use the monotonic S=1 response from the W3C Audio EQ Cookbook:
-//! <https://www.w3.org/TR/audio-eq-cookbook/>
+//! Shelves use the W3C Audio EQ Cookbook's Q form; Q = 1/sqrt(2) is the
+//! monotonic S=1 slope: <https://www.w3.org/TR/audio-eq-cookbook/>
 
 use crate::{Error, Result};
 use std::f64::consts::PI;
 
+/// The default shelf and pass Q: S=1 shelves and Butterworth pass filters.
 pub const SHELF_Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
 pub const MAX_BANDS: usize = 10;
 pub const WORDS: usize = 103;
@@ -155,7 +156,13 @@ pub fn filter_headroom_db(f: &Filter) -> f64 {
         return 0.0;
     }
     match f.kind {
-        Kind::Peak | Kind::LowShelf | Kind::HighShelf => f.gain.max(0.0),
+        Kind::Peak => f.gain.max(0.0),
+        // Above Q = 1/sqrt(2) a shelf overshoots on both sides of its midpoint.
+        Kind::LowShelf | Kind::HighShelf => shelf_turning_ratios(f)
+            .into_iter()
+            .flatten()
+            .map(|ratio| shelf_db(f, ratio))
+            .fold(f.gain.max(0.0), f64::max),
         // BLT maps the analog prototype's whole axis onto DC..Nyquist. A resonant
         // second-order pass filter peaks at Q / sqrt(1 - 1/(4Q^2)).
         Kind::LowPass | Kind::HighPass if f.q > SHELF_Q => {
@@ -165,6 +172,31 @@ pub fn filter_headroom_db(f: &Filter) -> f64 {
     }
 }
 
+/// The analog frequencies, as ratios to the midpoint, where a shelf with
+/// Q > 1/sqrt(2) peaks and dips. The two are reciprocals.
+///
+/// With x = (w/w0)^2, the low shelf's |H|^2 is A^2 ((A - x)^2 + kx) / ((1 - Ax)^2 + kx)
+/// with k = A/Q^2. Its turning points solve c x^2 + 2(1 + A^2) x + c = 0 with
+/// c = k - 2A, which has positive roots only when c < 0. A high shelf is the
+/// same response mirrored about w0, so it turns at the same pair.
+pub fn shelf_turning_ratios(f: &Filter) -> Option<[f64; 2]> {
+    if !f.kind.is_shelf() || f.gain == 0.0 || f.q <= SHELF_Q {
+        return None;
+    }
+    let a = 10f64.powf(f.gain / 40.0);
+    let c = a / (f.q * f.q) - 2.0 * a;
+    let half = 1.0 + a * a;
+    let x = (-half + (half * half - c * c).max(0.0).sqrt()) / c;
+    Some([x.sqrt(), 1.0 / x.sqrt()])
+}
+
+/// A low shelf's analog gain in dB at `ratio` times its midpoint.
+fn shelf_db(f: &Filter, ratio: f64) -> f64 {
+    let a = 10f64.powf(f.gain / 40.0);
+    let (k, x) = (a / (f.q * f.q), ratio * ratio);
+    10.0 * (a * a * ((a - x).powi(2) + k * x) / ((1.0 - a * x).powi(2) + k * x)).log10()
+}
+
 /// a0-normalized b0, b1, b2, a1, a2 for one validated filter.
 pub fn rbj_biquad(f: &Filter, rate: f64) -> Stage {
     if !f.enabled {
@@ -172,8 +204,7 @@ pub fn rbj_biquad(f: &Filter, rate: f64) -> Stage {
     }
     let omega = 2.0 * PI * f.frequency / rate;
     let (cosine, sine) = (omega.cos(), omega.sin());
-    let q = if f.kind.is_shelf() { SHELF_Q } else { f.q };
-    let alpha = sine / (2.0 * q);
+    let alpha = sine / (2.0 * f.q);
     let (b0, b1, b2, a0, a1, a2);
     match f.kind {
         Kind::Peak => {
