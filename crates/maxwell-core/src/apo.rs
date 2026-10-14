@@ -124,11 +124,7 @@ fn from_json(text: &str) -> Result<Value> {
         let is_pass = kind == "low_pass" || kind == "high_pass";
         let is_shelf = kind == "low_shelf" || kind == "high_shelf";
         let field = |key| get(row, key).cloned().unwrap_or(Value::Null);
-        let q = if is_shelf {
-            float(SHELF_Q)
-        } else {
-            get(row, "q").cloned().unwrap_or(if is_pass { float(SHELF_Q) } else { Value::Null })
-        };
+        let q = get(row, "q").cloned().unwrap_or(if is_pass || is_shelf { float(SHELF_Q) } else { Value::Null });
         filters.push(object([
             ("type", Value::from(kind)),
             ("frequency", field("frequency")),
@@ -200,19 +196,18 @@ pub fn parse(text: &Value) -> Result<Value> {
             warnings.push(format!("Line {number}: skipped unknown filter type {code}."));
             continue;
         };
-        if let Some(slope) = SLOPE.captures(rest) {
-            let degrees = slope.get(1).expect("group").as_str();
+        // A shelf's slope in dB per octave, where 12 dB is S = 1.
+        let mut slope = None;
+        if let Some(found) = SLOPE.captures(rest) {
+            let degrees = found.get(1).expect("group").as_str();
             if code == "LS" || code == "HS" {
                 warnings.push(format!(
-                    "Line {number}: skipped a {code} {degrees} dB corner-frequency shelf; only center-frequency S=1 shelves are supported."
+                    "Line {number}: skipped a {code} {degrees} dB corner-frequency shelf; only center-frequency shelves are supported."
                 ));
                 continue;
             }
-            rest = &rest[slope.get(0).expect("match").end()..];
-            if parse_number(degrees) != Some(12.0) {
-                warnings
-                    .push(format!("Line {number}: shelf slope {degrees} dB changed to the headset's fixed S=1 slope."));
-            }
+            rest = &rest[found.get(0).expect("match").end()..];
+            slope = parse_number(degrees).map(|degrees| (degrees, found[1].to_string()));
         }
         let Some(frequency) = value(rest, "fc") else {
             warnings.push(format!("Line {number}: skipped a filter with no Fc frequency."));
@@ -239,14 +234,27 @@ pub fn parse(text: &Value) -> Result<Value> {
                 }
             }
             "low_shelf" | "high_shelf" => {
-                gain = Some(clamp(gain.unwrap_or(0.0), -12.0, 12.0, "Gain", number, &mut warnings));
-                if let Some(q) = q.filter(|q| (q - SHELF_Q).abs() > 0.02) {
-                    warnings.push(format!(
-                        "Line {number}: shelf Q {} changed to 0.707; the headset uses a fixed S=1 slope.",
-                        g(q)
-                    ));
-                }
-                SHELF_Q
+                let shelf_gain = clamp(gain.unwrap_or(0.0), -12.0, 12.0, "Gain", number, &mut warnings);
+                gain = Some(shelf_gain);
+                let q = match (q, slope) {
+                    (Some(q), _) => clamp(q, 0.1, 20.0, "Q", number, &mut warnings),
+                    (None, Some((degrees, text))) => {
+                        // The cookbook's 1/Q = sqrt((A + 1/A)(1/S - 1) + 2).
+                        let a = 10f64.powf(shelf_gain / 40.0);
+                        let inverse = ((a + 1.0 / a) * (12.0 / degrees - 1.0) + 2.0).sqrt();
+                        if degrees > 0.0 && inverse.is_finite() && inverse > 0.0 {
+                            clamp(1.0 / inverse, 0.1, 20.0, "Q", number, &mut warnings)
+                        } else {
+                            warnings.push(format!(
+                                "Line {number}: shelf slope {text} dB can't be used with its gain; using Q 0.707."
+                            ));
+                            SHELF_Q
+                        }
+                    }
+                    (None, None) => SHELF_Q,
+                };
+                // S=1, written as Q 0.7071 or a 12 dB slope, reads back exactly.
+                if (q - SHELF_Q).abs() < 5e-4 { SHELF_Q } else { q }
             }
             _ => {
                 if gain.is_none() {
@@ -329,8 +337,7 @@ pub fn export(preset: &Value, preamp_db: &Value) -> Result<String> {
         if kind != "low_pass" && kind != "high_pass" {
             line += &format!(" Gain {} dB", number_text(field("gain")?));
         }
-        let q = if kind == "low_shelf" || kind == "high_shelf" { SHELF_Q } else { field("q")? };
-        line += &format!(" Q {}", number_text(q));
+        line += &format!(" Q {}", number_text(field("q")?));
         lines.push(line);
     }
     Ok(lines.join("\n") + "\n")

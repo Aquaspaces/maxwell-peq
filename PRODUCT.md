@@ -30,7 +30,7 @@ Audeze HQ only offers a ten-band graphic EQ. This tool writes real parametric co
 ## Capabilities and Constraints
 
 - 1–10 filters, 20–20,000 Hz, gain −12 to +12 dB, Q 0.1–20.
-- Shelves have a fixed slope (S = 1, Q ≈ 0.707). Pass filters are 12 dB/octave with adjustable Q and no gain.
+- Shelves have adjustable Q, defaulting to the S = 1 slope (Q ≈ 0.707). Pass filters are 12 dB/octave with adjustable Q and no gain.
 - Peaks are confirmed by listening on the headset; shelf and pass filters are experimental. A rough midband measurement matched them, but bass and treble are unmeasured and the response plot is calculated, not measured.
 - Auto preamp subtracts the peak of the combined curve; manual preamp must give at least that much headroom.
 - A rate that can't hold the filters precisely gets the nearest values it can (the other encoder, a slightly higher frequency or lower Q), and the editor says so.

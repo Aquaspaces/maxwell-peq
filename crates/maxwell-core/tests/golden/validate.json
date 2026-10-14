@@ -190,7 +190,18 @@
     }
    ]
   },
-  "error": "Shelf filters use fixed slope S=1 (Q=0.70710678)."
+  "result": {
+   "filters": [
+    {
+     "type": "high_shelf",
+     "frequency": 1000.0,
+     "gain": 3.0,
+     "q": 4.0,
+     "enabled": true
+    }
+   ],
+   "preamp": -7.17
+  }
  },
  {
   "request": {

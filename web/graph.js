@@ -14,8 +14,7 @@ const PEQGraph = (() => {
 
   function coefficients(f) {
     const w = 2 * Math.PI * f.frequency / RATE, cos = Math.cos(w), sin = Math.sin(w);
-    const q = isShelf(f.type) ? SHELF_Q : f.q;
-    const alpha = sin / (2 * q);
+    const alpha = sin / (2 * f.q);
     let b0, b1, b2, a0, a1, a2;
     if (f.type === 'low_pass' || f.type === 'high_pass') {
       const sign = f.type === 'low_pass' ? 1 : -1;
@@ -130,7 +129,7 @@ const PEQGraph = (() => {
         const shown = valid ? f.frequency : Number.isFinite(f.frequency) && f.frequency > 20000 ? 20000 : 20;
         handle.node.setAttribute('transform', `translate(${x(shown).toFixed(1)},${y(handleDb(f)).toFixed(1)})`);
         handle.node.setAttribute('class', `g-handle${index === model.selected ? ' selected' : ''}${f.enabled ? '' : ' off'}${isPass(f.type) ? ' pass' : ''}${valid ? '' : ' invalid'}`);
-        handle.node.setAttribute('aria-label', `Filter ${index + 1}, ${typeNames[f.type]}, ${valid ? formatHz(f.frequency) : 'invalid frequency'}${isPass(f.type) ? '' : `, ${signed(f.gain || 0)} dB`}${isShelf(f.type) ? '' : `, Q ${Number(f.q).toFixed(2)}`}${f.enabled ? '' : ', off'}. Arrow keys move it, plus and minus change Q.`);
+        handle.node.setAttribute('aria-label', `Filter ${index + 1}, ${typeNames[f.type]}, ${valid ? formatHz(f.frequency) : 'invalid frequency'}${isPass(f.type) ? '' : `, ${signed(f.gain || 0)} dB`}, Q ${Number(f.q).toFixed(2)}${f.enabled ? '' : ', off'}. Arrow keys move it, plus and minus change Q.`);
       });
       tip();
     }
@@ -141,7 +140,7 @@ const PEQGraph = (() => {
       if (!f) { layers.tip.setAttribute('visibility', 'hidden'); return; }
       const parts = [formatHz(f.frequency)];
       if (!isPass(f.type)) parts.push(`${signed(f.gain)} dB`);
-      if (!isShelf(f.type)) parts.push(`Q ${f.q.toFixed(2)}`);
+      parts.push(`Q ${f.q.toFixed(2)}`);
       tipText.textContent = parts.join('  ·  ');
       const width = tipText.getComputedTextLength() + 16;
       let tx = x(f.frequency) - width / 2, ty = y(handleDb(f)) - 42;
@@ -171,7 +170,7 @@ const PEQGraph = (() => {
         if (change.frequency === f.frequency) change.frequency = Math.min(20000, Math.max(20, f.frequency + (event.key === 'ArrowRight' ? 1 : -1) * (f.frequency < 1000 ? 1 : 10)));
       } else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !isPass(f.type)) {
         change.gain = roundDb((f.gain || 0) + (event.key === 'ArrowUp' ? 1 : -1) * (fine ? 0.1 : 0.5));
-      } else if ((event.key === '+' || event.key === '=' || event.key === '-') && !isShelf(f.type)) {
+      } else if ((event.key === '+' || event.key === '=' || event.key === '-') && Number.isFinite(f.q)) {
         change.q = Math.round(Math.min(20, Math.max(0.1, f.q * (event.key === '-' ? 1 / 1.1 : 1.1))) * 100) / 100;
       } else if (event.key === 'Delete') {
         event.preventDefault(); handlers.onRemove(index); return;
@@ -223,7 +222,7 @@ const PEQGraph = (() => {
       if (!target) return;
       const index = Number(target.dataset.index);
       const f = model.filters[index];
-      if (!f || isShelf(f.type) || !Number.isFinite(f.q)) return;
+      if (!f || !Number.isFinite(f.q)) return;
       event.preventDefault();
       const q = Math.round(Math.min(20, Math.max(0.1, f.q * Math.exp(-event.deltaY * 0.0015))) * 100) / 100;
       if (q === f.q) return;

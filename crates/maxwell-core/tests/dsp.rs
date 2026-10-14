@@ -3,7 +3,9 @@
 //! pinned by golden.rs.
 
 use maxwell_core::compile::{Encoder, compile_preset, compile_with, validate};
-use maxwell_core::dsp::{Filter, Kind, RATES, SHELF_Q, biquad, decode_words, filter_headroom_db, rbj_biquad, response};
+use maxwell_core::dsp::{
+    Filter, Kind, RATES, SHELF_Q, biquad, decode_words, filter_headroom_db, rbj_biquad, response, shelf_turning_ratios,
+};
 use maxwell_core::encoder::encode_bank;
 use maxwell_core::vendor;
 use serde_json::{Value, json};
@@ -46,7 +48,7 @@ fn invalid_values() {
         json!({"filters": []}),
         json!({"filters": [{"type": "unknown", "frequency": 1000, "gain": 0, "q": 1}]}),
         json!({"filters": [row_json("low_pass", 1000.0, 3.0, SHELF_Q)]}),
-        json!({"filters": [row_json("high_shelf", 1000.0, 0.0, 4.0)]}),
+        json!({"filters": [row_json("high_shelf", 1000.0, 0.0, 25.0)]}),
     ];
     // NaN cannot be written in JSON; Python rejected float('nan') in validation.
     cases.push(json!({"filters": [{"frequency": "nan", "gain": -3, "q": 1}]}));
@@ -118,6 +120,46 @@ fn shelf_endpoints_midpoint_and_monotonicity() {
             }
         }
     }
+}
+
+#[test]
+fn shelf_q_keeps_endpoints_and_bounds_overshoot() {
+    for kind in [Kind::LowShelf, Kind::HighShelf] {
+        for gain in [-12.0, -3.0, 3.0, 12.0] {
+            for q in [0.3, SHELF_Q, 1.0, 2.0, 8.0] {
+                let f = row(kind, 1000.0, gain, q);
+                let bound = filter_headroom_db(&f);
+                assert_eq!(shelf_turning_ratios(&f).is_some(), q > SHELF_Q);
+                for (_, rate) in RATES {
+                    let rate = f64::from(rate);
+                    let stage = rbj_biquad(&f, rate);
+                    assert!(close(
+                        response(&[stage], 1.0, 0.0, rate),
+                        if kind == Kind::LowShelf { gain } else { 0.0 },
+                        8
+                    ));
+                    assert!(close(response(&[stage], 1.0, 1000.0, rate), gain / 2.0, 8));
+                    let mut peak = f64::NEG_INFINITY;
+                    for i in 0..=4000 {
+                        peak = peak.max(response(&[stage], 1.0, rate * f64::from(i) / 8000.0, rate));
+                    }
+                    assert!(peak <= bound + 1e-8, "{kind:?} {gain} dB Q {q}: {peak} vs {bound}");
+                    // The turning points map to digital frequencies the way a pass filter's resonance does.
+                    let turning = shelf_turning_ratios(&f).map_or(vec![], |ratios| {
+                        let warp = (std::f64::consts::PI * 1000.0 / rate).tan();
+                        ratios.map(|ratio| rate / std::f64::consts::PI * (warp * ratio).atan()).to_vec()
+                    });
+                    let highest =
+                        turning.iter().map(|&at| response(&[stage], 1.0, at, rate)).fold(gain.max(0.0), f64::max);
+                    assert!(close(highest, bound, 8), "{kind:?} {gain} dB Q {q}: {highest} vs {bound}");
+                }
+            }
+        }
+    }
+    // A shelf cut with Q above 1/sqrt(2) overshoots above 0 dB, so it needs preamp.
+    let (filters, preamp) = validate(&json!({"filters": [row_json("low_shelf", 200.0, -6.0, 2.0)]})).unwrap();
+    assert_eq!(filters[0].q, 2.0);
+    assert!(preamp < -1.0, "{preamp}");
 }
 
 #[test]

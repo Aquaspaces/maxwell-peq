@@ -85,7 +85,7 @@ Filter 2: ON PK Fc 180 Hz Gain -2.4 dB Q 1.10
 `PK`/`PEQ`/`Modal`, `LS`/`LSC`, `HS`/`HSC`, `LP`/`LPQ` and `HP`/`HPQ` filters import, and so do `BW Oct` widths. The preview lists anything that changes:
 
 - Band-pass, notch and all-pass filters, corner-frequency shelves and GraphicEQ lines are skipped.
-- Shelf Q becomes the headset's fixed S = 1 slope.
+- Shelf Q imports as written. An `LSC`/`HSC` slope in dB per octave becomes the equivalent Q (12 dB is S = 1, Q ≈ 0.707).
 - Values outside the headset's range are clamped.
 - Only the first ten filters are kept.
 - The file's preamp is replaced by auto preamp, so boosts can't clip.
@@ -148,11 +148,11 @@ On 2026-10-12 an earlier Linux build was tested in WSL2 (Ubuntu 26.04, kernel 6.
 
 - 1–10 filters of any supported type, 20–20,000 Hz. Disabled rows are replaced with unity filters.
 - **Peaks:** −12 to +12 dB, Q 0.1–20. Confirmed by listening on the headset.
-- **Low/high shelves:** −12 to +12 dB with a fixed slope S = 1 (Q ≈ 0.7071). Frequency sets the shelf midpoint. The slope isn't adjustable.
+- **Low/high shelves:** −12 to +12 dB, Q 0.1–20, default 0.7071 (slope S = 1, the steepest without overshoot). Frequency sets the shelf midpoint. Lower Q gives a gentler slope; higher Q adds a bump and dip on either side of the midpoint, which auto preamp accounts for.
 - **Low/high-pass:** second order (12 dB/octave), Q 0.1–20, no gain. Q ≈ 0.7071 gives the Butterworth response; larger Q adds resonance near the cutoff.
 - **Shelf and pass filters are experimental.** Numerical checks pass and a rough measurement on the headset matched them from 300 Hz to 3 kHz (see [PROOF.md](PROOF.md)), but their bass and treble response hasn't been measured. The type selector and compiled result mark them.
-- **Auto preamp** subtracts the peak of the combined response, sampled at every rate around each filter and its pass-filter resonance, rounded up to 0.01 dB. Overlapping boosts and cuts offset each other, so it is usually far less than the sum of the boosts. If quantization still lifts the compiled response past +0.15 dB, it drops a little further. Manual preamp must provide at least the curve's peak; maximum attenuation is 60 dB.
-- **Precision:** compilation checks pole stability and compares the decoded, quantized response against the RBJ reference, rejecting sampled errors over 0.5 dB (narrow sub-bass peaks come close at 88.2 and 96 kHz). For shelf and pass sets, both curves are floored at −90 dB to handle deep stopband nulls, and DC, Nyquist and pass-filter resonance are checked too. When a bank exceeds the limit, the app sends the nearest set that doesn't: at that rate it first tries the built-in encoder in place of the DLL, then raises one filter's frequency (up to an octave, lowest filters first) or lowers its Q (down to a quarter), in the smallest steps the editor shows. Other rates keep the exact values, and the editor notes each change. Only sets that no such change fixes are rejected.
+- **Auto preamp** subtracts the peak of the combined response, sampled at every rate around each filter, its pass-filter resonance and its shelf overshoot, rounded up to 0.01 dB. Overlapping boosts and cuts offset each other, so it is usually far less than the sum of the boosts. If quantization still lifts the compiled response past +0.15 dB, it drops a little further. Manual preamp must provide at least the curve's peak; maximum attenuation is 60 dB.
+- **Precision:** compilation checks pole stability and compares the decoded, quantized response against the RBJ reference, rejecting sampled errors over 0.5 dB (narrow sub-bass peaks come close at 88.2 and 96 kHz). For shelf and pass sets, both curves are floored at −90 dB to handle deep stopband nulls, and DC, Nyquist, pass-filter resonance and shelf overshoot are checked too. When a bank exceeds the limit, the app sends the nearest set that doesn't: at that rate it first tries the built-in encoder in place of the DLL, then raises one filter's frequency (up to an octave, lowest filters first) or lowers its Q (down to a quarter), in the smallest steps the editor shows. Other rates keep the exact values, and the editor notes each change. Only sets that no such change fixes are rejected.
 - **Banks:** 44.1, 48, 88.2 and 96 kHz. The USB device revision is not treated as a firmware version.
 - The window talks to the app over Tauri IPC. `--serve` listens on loopback only, with a per-process request token and same-origin checks. One device operation runs at a time. No telemetry and no external assets.
 
@@ -170,7 +170,7 @@ Native HID operations run in a child process (`MaxwellPEQ.exe --worker device`, 
 
 ### Filter JSON
 
-Each row accepts `type`: `peak`, `low_shelf`, `high_shelf`, `low_pass` or `high_pass`. A missing type or the legacy `PK` means peak. Shelves may omit Q; pass filters may omit gain and Q. See [examples/shelf-and-pass.json](examples/shelf-and-pass.json). These files keep filter types and are stored on the computer, not in the headset.
+Each row accepts `type`: `peak`, `low_shelf`, `high_shelf`, `low_pass` or `high_pass`. A missing type or the legacy `PK` means peak. Shelves may omit Q (default 0.7071); pass filters may omit gain and Q. See [examples/shelf-and-pass.json](examples/shelf-and-pass.json). These files keep filter types and are stored on the computer, not in the headset.
 
 ## Development
 
