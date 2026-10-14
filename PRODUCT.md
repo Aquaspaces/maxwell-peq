@@ -38,6 +38,8 @@ Audeze HQ only offers a ten-band graphic EQ. This tool writes real parametric co
 - A save that starts but can't be verified drops the preset's link to its profile rather than claiming it worked.
 - Balance writes are capped at 150 per side, skip the firmware-reserved values, and are read back before they count. Headset controls are read back too.
 - Device access is on by default; `--offline` disables it.
+- The tray, global shortcut keys and `--preset` / `--status` only switch between the four custom presets and read battery, mic and preset. A shortcut never shows a window, so it can't take focus from a game.
+- Settings: start at login, the tray icon, closing or minimizing to the tray, and a daily update check against GitHub releases with the notes of recent releases. A new release never opens a window or takes focus.
 
 ## Evidence on Hand
 

@@ -37,8 +37,10 @@ Command-line options:
 
 - `--offline`: edit and export without ever opening the headset.
 - `--serve [--port N]`: serve the editor at `http://127.0.0.1:8769/` for a normal browser instead of opening a window.
+- `--tray`: start in the tray without opening the editor.
+- `--preset <1-4|next|previous>` and `--status`: switch EQ or print the headset's state, then exit (see [Tray, shortcut keys and scripts](#tray-shortcut-keys-and-scripts)).
 
-Only one copy of the app runs at a time, since two would share the headset interface.
+Only one copy of the app runs at a time, since two would share the headset interface. Starting it again opens the running copy's editor.
 
 ## Close Audeze HQ first
 
@@ -113,6 +115,38 @@ The same dialog switches between all ten onboard presets. The headset plays the 
 
 These commands were decoded from Audeze HQ 1.2.48 and haven't been tested on a headset yet. Factory reset and the audio driver reinstall are left out on purpose.
 
+## Tray, shortcut keys and scripts
+
+The app keeps running in the notification area after you close the editor, unless you turn that off in **Settings**. Its icon is a glance at the headset: a battery gauge with the percentage in the middle (red at 15% or below), a mic at bottom left that turns red and crossed out when muted, and a green pill at bottom right with the active EQ, 1 to 4. The pill is hidden while a built-in preset plays, and the gauge is empty while the headset can't be read. Hovering over the icon spells it all out. The headset is read once a minute, and never while another headset action is running.
+
+- **Click** the icon for a panel with the battery gauge, whether the mic is muted, and the active EQ. Click the EQ to switch.
+- **Right-click** it for EQ 1 to 4 (with each preset's profile), Next EQ, Previous EQ, Open Maxwell PEQ, Read headset, Keyboard shortcuts…, Settings…, Start with Windows, and Quit. **Close Audeze HQ** appears while it is running, and **Download Maxwell PEQ x.y.z** when a newer release is out.
+
+Shortcut keys switch EQ from any app, including full-screen games, and never show a window or take focus. The defaults are **Ctrl+Alt+1** to **Ctrl+Alt+4** for EQ 1 to 4 and **Ctrl+Alt+E** for the next EQ; Previous EQ has none until you set one. Change them under **Keyboard shortcuts** in the editor's sidebar or the tray menu: click a shortcut and press the new keys, **Backspace** to clear it, or **Esc** to cancel. A shortcut needs Ctrl, Alt, Shift or Win unless it's F1 to F12 or a media key, and one another app already uses is marked in the list.
+
+From a script:
+
+```powershell
+MaxwellPEQ.exe --preset 2        # or next, previous
+MaxwellPEQ.exe --status          # battery, mic, preset and profile names as JSON
+```
+
+When the app is running, both go through it; otherwise they open the headset themselves and exit. The exit code is 0 on success and 1 on failure. On Windows the exe is a GUI program, so PowerShell may print the prompt before its output; use `Start-Process MaxwellPEQ.exe -ArgumentList '--status' -Wait -NoNewWindow` or pipe it (`MaxwellPEQ.exe --status | ConvertFrom-Json`) to wait for it.
+
+### Settings
+
+**Settings** in the editor's sidebar (or the tray menu) has:
+
+- **Start when you sign in**: starts the app in the tray at login. The same switch as **Start with Windows** in the tray menu.
+- **Show the tray icon**: with it off, closing the editor quits the app, and starting at login opens the editor.
+- **Keep running when this window closes** (on by default) and **Minimize to the tray** (off by default). Both need the tray icon.
+- **Check for updates** (on by default): asks GitHub's releases API about 10 seconds after start and then once a day. The request carries only the app version in its User-Agent. A new release never opens anything: the tray menu gains a download item and **Settings** shows a dot. **Check now** works with the setting off.
+- **What's new**: the notes of the last five releases, with the newer ones marked. **Download** opens the release page in your browser.
+
+The settings live in `settings.json` in the data folder, next to the shortcut keys.
+
+The running app takes commands on a loopback port. The port and a fresh token are written to `remote.json` in the data folder at start-up, and a command without that token is refused.
+
 ## Data and the Audeze DLL
 
 Profiles and balance write logs live in:
@@ -154,7 +188,7 @@ On 2026-10-12 an earlier Linux build was tested in WSL2 (Ubuntu 26.04, kernel 6.
 - **Auto preamp** subtracts the peak of the combined response, sampled at every rate around each filter and its pass-filter resonance, rounded up to 0.01 dB. Overlapping boosts and cuts offset each other, so it is usually far less than the sum of the boosts. If quantization still lifts the compiled response past +0.15 dB, it drops a little further. Manual preamp must provide at least the curve's peak; maximum attenuation is 60 dB.
 - **Precision:** compilation checks pole stability and compares the decoded, quantized response against the RBJ reference, rejecting sampled errors over 0.5 dB (narrow sub-bass peaks come close at 88.2 and 96 kHz). For shelf and pass sets, both curves are floored at −90 dB to handle deep stopband nulls, and DC, Nyquist and pass-filter resonance are checked too. When a bank exceeds the limit, the app sends the nearest set that doesn't: at that rate it first tries the built-in encoder in place of the DLL, then raises one filter's frequency (up to an octave, lowest filters first) or lowers its Q (down to a quarter), in the smallest steps the editor shows. Other rates keep the exact values, and the editor notes each change. Only sets that no such change fixes are rejected.
 - **Banks:** 44.1, 48, 88.2 and 96 kHz. The USB device revision is not treated as a firmware version.
-- The window talks to the app over Tauri IPC. `--serve` listens on loopback only, with a per-process request token and same-origin checks. One device operation runs at a time. No telemetry and no external assets.
+- The window talks to the app over Tauri IPC. `--serve` listens on loopback only, with a per-process request token and same-origin checks. One device operation runs at a time. No telemetry and no external assets. The only request to the internet is the update check, which you can turn off in Settings.
 
 ## How it works
 
@@ -206,7 +240,7 @@ The Rust tests include golden parity checks: compiled coefficient blobs, curves,
 
 ### Releases
 
-`.github/workflows/release.yml` runs when a `v*` tag is pushed; the tag must match the workspace version in `Cargo.toml`. It runs the tests, builds the Windows installer, the standalone exe, the universal macOS `.dmg` and the Linux `.deb`, `.rpm` and `.AppImage`, and uploads them to a **draft** release, which you publish by hand after checking it:
+`.github/workflows/release.yml` runs when a `v*` tag is pushed; the tag must match the workspace version in `Cargo.toml`. It runs the tests, builds the Windows installer, the standalone exe, the universal macOS `.dmg` and the Linux `.deb`, `.rpm` and `.AppImage`, and uploads them to a **draft** release, which you publish by hand after checking it. Before publishing, replace the placeholder under **What's new** in the draft with the release's changes: the app shows that section as the patch notes, and leaves out **Downloads**.
 
 ```powershell
 # bump version in Cargo.toml, commit, then:

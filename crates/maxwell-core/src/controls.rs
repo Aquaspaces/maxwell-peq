@@ -3,7 +3,8 @@
 //! voice prompts, auto shutdown, battery, mic mute and firmware versions.
 //!
 //! Like balance, each write changes the headset at once and is read back.
-//! Runs report the value they replaced.
+//! Runs report the value they replaced. `glance` reads only what the tray
+//! shows: the active preset, mic mute and battery.
 
 use crate::hid::{Transport, connect};
 use crate::json::{get, object};
@@ -14,7 +15,7 @@ use crate::protocol::{
 use crate::{Error, Result};
 use serde_json::{Value, json};
 
-pub const OPERATIONS: [&str; 2] = ["controls_read", "control_write"];
+pub const OPERATIONS: [&str; 3] = ["controls_read", "control_write", "glance"];
 
 /// Onboard presets by index. 7..=10 are the four custom slots.
 pub const PRESETS: [&str; 10] =
@@ -107,6 +108,15 @@ fn requested(sub: u8, value: &Value, sidetone_max: u16) -> Result<u16> {
     }
 }
 
+/// The mic mute reading: 0 is muted, 0xFF is live, anything else unknown.
+fn mic_muted(raw: u16) -> Value {
+    match raw {
+        0 => json!(true),
+        0xFF => json!(false),
+        _ => Value::Null,
+    }
+}
+
 /// Status readings fail on some firmware; the controls still work without them.
 fn optional<T: Into<Value>>(reading: Result<T>) -> Value {
     reading.map_or(Value::Null, Into::into)
@@ -124,11 +134,6 @@ fn read_all(device: &mut dyn Controls, transport: Transport) -> Result<Value> {
     let voice_prompt = read(VOICE_PROMPT)?;
     let auto_off = read(AUTO_OFF)?;
     let mic = read(MIC_MUTE)?;
-    let mic_muted = match mic {
-        0 => json!(true),
-        0xFF => json!(false),
-        _ => Value::Null,
-    };
     let dongle_firmware = if transport == Transport::Dongle { optional(device.firmware(true)) } else { Value::Null };
     Ok(object([
         ("preset", shown(PRESET_INDEX, preset)),
@@ -141,9 +146,20 @@ fn read_all(device: &mut dyn Controls, transport: Transport) -> Result<Value> {
         ("noise_reduction", json!(noise_reduction)),
         ("voice_prompt", json!(voice_prompt)),
         ("auto_off", json!(auto_off)),
-        ("mic_muted", mic_muted),
+        ("mic_muted", mic_muted(mic)),
         ("battery", optional(device.battery())),
         ("firmware", object([("headset", optional(device.firmware(false))), ("dongle", dongle_firmware)])),
+        ("transport", json!(transport.name())),
+    ]))
+}
+
+fn glance(device: &mut dyn Controls, transport: Transport) -> Result<Value> {
+    let preset = device.read_control(PRESET_INDEX)?;
+    let mic = device.read_control(MIC_MUTE)?;
+    Ok(object([
+        ("preset", shown(PRESET_INDEX, preset)),
+        ("mic_muted", mic_muted(mic)),
+        ("battery", optional(device.battery())),
         ("transport", json!(transport.name())),
     ]))
 }
@@ -155,6 +171,10 @@ pub fn execute(request: &Value, open: &mut OpenControls, progress: &mut Progress
         Some("controls_read") => {
             let (mut device, transport) = connect(requested_transport, |transport| open(false, transport))?;
             return read_all(device.as_mut(), transport);
+        }
+        Some("glance") => {
+            let (mut device, transport) = connect(requested_transport, |transport| open(false, transport))?;
+            return glance(device.as_mut(), transport);
         }
         Some("control_write") => {}
         _ => return Err(Error::value("Unsupported device operation.")),
