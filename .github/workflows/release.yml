@@ -21,7 +21,7 @@ env:
 jobs:
   draft:
     name: Create draft release
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-normal
     outputs:
       release_id: ${{ steps.release.outputs.id }}
     steps:
@@ -55,18 +55,18 @@ jobs:
       matrix:
         include:
           - name: Windows
-            os: windows-latest
+            os: namespace-profile-windows
             args: ''
             targets: ''
             plain: true
           - name: macOS universal
-            os: macos-latest
+            os: namespace-profile-macos
             args: --target universal-apple-darwin
             targets: aarch64-apple-darwin,x86_64-apple-darwin
             plain: false
           # 22.04 so the .deb and AppImage run on older glibc too.
           - name: Linux x64
-            os: ubuntu-22.04
+            os: namespace-profile-ubuntu-22
             args: ''
             targets: ''
             plain: false

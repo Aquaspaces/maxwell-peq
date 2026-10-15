@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        os: [namespace-profile-windows, namespace-profile-macos, namespace-profile-ubuntu-22]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
